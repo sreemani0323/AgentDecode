@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.yarn/
+
+# Testing & Coverage
+coverage/
+.pytest_cache/
+.htmlcov/
+
+# Next.js Build
+.next/
+out/
+
+# General Build Outputs
+build/
+dist/
+*.egg-info/
+
+# Python Cache & Virtual Envs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+
+# Local Environment Variables
+.env
+.env*.local
+!.env.example
+!.env*.example
+
+# Vercel
+.vercel/
+
+# TypeScript & IDEs
+*.tsbuildinfo
+.vscode/
+.idea/
+.DS_Store
+*.pem
+*.log
+
+# Workspace & Agent metadata
+.agents/
+skills-lock.json
+cd
+
