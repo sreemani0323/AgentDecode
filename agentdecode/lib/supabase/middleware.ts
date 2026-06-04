@@ -14,29 +14,38 @@ export async function updateSession(request: NextRequest) {
     return { supabase: null, response: supabaseResponse }
   }
 
-  const supabase = createServerClient(
-    supabaseUrl,
-    supabaseAnonKey,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
+  try {
+    const supabase = createServerClient(
+      supabaseUrl,
+      supabaseAnonKey,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+              supabaseResponse = NextResponse.next({
+                request,
+              })
+              cookiesToSet.forEach(({ name, value, options }) =>
+                supabaseResponse.cookies.set(name, value, options)
+              )
+            } catch (cookieError) {
+              console.error('[AgentDecode Middleware] Failed to set cookies:', cookieError)
+            }
+          },
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
-            request,
-          })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
+      }
+    )
 
-  // refreshing the auth token
-  await supabase.auth.getUser()
+    // refreshing the auth token
+    await supabase.auth.getUser()
 
-  return { supabase, response: supabaseResponse }
+    return { supabase, response: supabaseResponse }
+  } catch (error) {
+    console.error('[AgentDecode Middleware] Exception during updateSession:', error)
+    return { supabase: null, response: supabaseResponse }
+  }
 }
