@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { sendAlertEmail } from '@/lib/resend'
+import { logger } from '@/lib/logger'
 
 export async function checkAndFireAlerts(projectId: string): Promise<void> {
   try {
@@ -91,10 +92,10 @@ export async function checkAndFireAlerts(projectId: string): Promise<void> {
           }
         }
       } catch (ruleErr) {
-        console.error(`[AgentDecode] Alert rule ${rule.id} check failed:`, ruleErr)
+        logger.error(`Alert rule ${rule.id} check failed`, ruleErr as Error)
       }
     }
   } catch (err) {
-    console.error('[AgentDecode] checkAndFireAlerts failed:', err)
+    logger.error('checkAndFireAlerts failed', err as Error)
   }
 }

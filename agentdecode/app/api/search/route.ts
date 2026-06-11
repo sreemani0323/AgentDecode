@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 /**
  * GET /api/search?q=timeout&limit=10
@@ -9,6 +10,11 @@ import { createClient } from '@/lib/supabase/server'
  * Auth: requires logged-in user (RLS enforced).
  */
 export async function GET(request: NextRequest) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const { searchParams } = new URL(request.url)
   const query = searchParams.get('q')?.trim()
   const limit = Math.min(parseInt(searchParams.get('limit') || '8'), 20)

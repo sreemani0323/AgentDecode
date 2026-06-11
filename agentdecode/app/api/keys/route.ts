@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { generateApiKey, hashApiKey } from '@/lib/utils'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 export async function GET(request: Request) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -54,6 +60,11 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -123,6 +134,11 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 

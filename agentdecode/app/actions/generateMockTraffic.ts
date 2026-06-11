@@ -2,6 +2,7 @@
 
 import { createServiceClient } from '@/lib/supabase/server'
 import { scoreSpanWithGroq } from '@/lib/groq'
+import { logger } from '@/lib/logger'
 
 // ─── Session archetypes ──────────────────────────────────────────
 // Each archetype defines a realistic AI agent pipeline with nested spans.
@@ -413,7 +414,7 @@ export async function generateMockTraffic(projectId: string): Promise<{ success:
         .single()
 
       if (sessionError || !session) {
-        console.error('[Mock] Failed to create session:', sessionError?.message)
+        logger.error('Failed to create session in mock traffic generation', new Error(sessionError?.message || 'Unknown error'))
         continue
       }
 
@@ -457,7 +458,7 @@ export async function generateMockTraffic(projectId: string): Promise<{ success:
           .single()
 
         if (spanError || !insertedSpan) {
-          console.error('[Mock] Failed to insert span:', spanError?.message)
+          logger.error('Failed to insert span in mock traffic generation', new Error(spanError?.message || 'Unknown error'))
           insertedSpanIds.push('')
           continue
         }
@@ -524,7 +525,7 @@ export async function generateMockTraffic(projectId: string): Promise<{ success:
 
     return { success: true, sessionsCreated: totalSessions, spansCreated: totalSpans }
   } catch (err: any) {
-    console.error('[Mock] generateMockTraffic failed:', err)
+    logger.error('generateMockTraffic failed', err as Error)
     return { success: false, sessionsCreated: totalSessions, spansCreated: totalSpans, error: err.message }
   }
 }

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: agentdecode/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: agentdecode
+      - run: npm run lint
+        working-directory: agentdecode
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: agentdecode/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: agentdecode
+      - run: npx tsc --noEmit
+        working-directory: agentdecode
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: agentdecode/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: agentdecode
+      - run: npm run test
+        working-directory: agentdecode
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, type-check, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: agentdecode/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: agentdecode
+      - run: npm run build
+        working-directory: agentdecode
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-key
+      SUPABASE_SERVICE_ROLE_KEY: placeholder-key

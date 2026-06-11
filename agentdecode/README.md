@@ -196,6 +196,68 @@ The app will be live at `your-project.vercel.app`.
 
 ---
 
+## Testing
+
+```bash
+# Unit & integration tests
+npm run test
+
+# Watch mode
+npm run test:watch
+
+# Coverage report
+npm run test:coverage
+
+# E2E tests (requires running dev server)
+npm run test:e2e
+
+# Type checking
+npm run type-check
+
+# Linting
+npm run lint
+```
+
+---
+
+## Architecture
+
+```mermaid
+graph TB
+    SDK["@agentdecode/sdk<br/>TypeScript SDK"] -->|POST /api/ingest| Ingest["Ingest API<br/>(rate limited, Zod validated)"]
+    HTTP["HTTP Client<br/>(any language)"] -->|POST /api/ingest| Ingest
+
+    Ingest --> Supabase["Supabase<br/>(Postgres + RLS)"]
+    Ingest -->|fire & forget| Groq["Groq<br/>(LLM eval scoring)"]
+    Ingest -->|fire & forget| Alerts["Alert Engine<br/>(rule evaluation)"]
+
+    Dashboard["Dashboard<br/>(Next.js 16)"] --> API["API Routes<br/>(14 route groups)"]
+    API --> Supabase
+    API --> Gemini["Gemini<br/>(AI error diagnosis)"]
+
+    Alerts -->|email| Resend["Resend<br/>(email alerts)"]
+
+    Middleware["Middleware<br/>(auth + security headers)"] --> Dashboard
+    Middleware --> API
+
+    Health["GET /api/health"] --> Supabase
+    Docs["GET /api/docs"] -->|OpenAPI 3.1| Spec["API Specification"]
+```
+
+---
+
+## API Reference
+
+The full API specification is available as an OpenAPI 3.1 JSON document:
+
+```
+GET /api/docs
+```
+
+This endpoint is publicly accessible (no auth required) and returns the complete spec for all 14 API route groups.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -207,6 +269,18 @@ The app will be live at `your-project.vercel.app`.
 | `GEMINI_API_KEY` | Optional | Google Gemini key for AI error diagnosis |
 | `RESEND_API_KEY` | Optional | Resend key for alert emails |
 | `NEXT_PUBLIC_SITE_URL` | Optional | Your deployment URL (for SDK snippets) |
+| `LOG_LEVEL` | Optional | Minimum log level: `debug`, `info`, `warn`, `error` |
+
+---
+
+## Contributing
+
+We welcome contributions! See our [Contributing Guide](.github/CONTRIBUTING.md) for:
+
+- Development setup
+- Branch naming and PR workflow
+- Testing requirements
+- Code style guidelines
 
 ---
 

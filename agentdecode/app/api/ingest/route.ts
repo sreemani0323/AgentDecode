@@ -5,6 +5,7 @@ import { scoreSpanWithGroq } from '@/lib/groq'
 import { checkAndFireAlerts } from '@/lib/alerts'
 import { ingestRateLimiter, getClientIdentifier } from '@/lib/rate-limit'
 import { checkEnv } from '@/lib/env'
+import { validateIngestPayload } from '@/lib/validation'
 
 export async function POST(request: Request) {
   // 0. Check critical env vars
@@ -72,17 +73,23 @@ export async function POST(request: Request) {
     .update({ last_used_at: new Date().toISOString() })
     .eq('id', apiKeyRecord.id)
 
-  // Parse body
-  let body: any
+  // Parse and validate body
+  let rawBody: unknown
   try {
-    body = await request.json()
+    rawBody = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  if (!body.spans || !Array.isArray(body.spans) || body.spans.length === 0) {
-    return NextResponse.json({ error: 'spans array is required and must not be empty' }, { status: 400 })
+  const validation = validateIngestPayload(rawBody)
+  if (!validation.success) {
+    return NextResponse.json(
+      { error: validation.error, details: validation.details },
+      { status: 400 }
+    )
   }
+
+  const body = validation.data
 
   try {
     // 9. Find or create session

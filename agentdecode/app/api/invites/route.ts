@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 // GET /api/invites?org_id=xxx — List all members of an organization
 export async function GET(request: Request) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -57,6 +63,11 @@ export async function GET(request: Request) {
 
 // POST /api/invites — Invite a user by email
 export async function POST(request: Request) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -159,6 +170,11 @@ export async function POST(request: Request) {
 
 // DELETE /api/invites — Remove a member from the organization
 export async function DELETE(request: Request) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 

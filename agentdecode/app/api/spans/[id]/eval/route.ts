@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const { id: spanId } = await params
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

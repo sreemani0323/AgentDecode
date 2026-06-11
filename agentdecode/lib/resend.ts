@@ -1,8 +1,10 @@
+import { logger } from '@/lib/logger'
+
 export async function sendAlertEmail(to: string, subject: string, body: string): Promise<void> {
   try {
     const resendApiKey = process.env.RESEND_API_KEY
     if (!resendApiKey) {
-      console.error('[AgentDecode] RESEND_API_KEY not set, skipping alert email')
+      logger.error('RESEND_API_KEY not set, skipping alert email')
       return
     }
 
@@ -22,10 +24,10 @@ export async function sendAlertEmail(to: string, subject: string, body: string):
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error(`[AgentDecode] Failed to send alert email: ${response.status} ${errorText}`)
+      logger.error('Failed to send alert email via Resend', { status: response.status, errorText })
     }
   } catch (err) {
-    console.error('[AgentDecode] Alert email error:', err)
+    logger.error('Alert email error', err as Error)
   }
 }
 

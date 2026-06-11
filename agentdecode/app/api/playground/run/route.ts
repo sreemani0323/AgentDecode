@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 /**
  * POST /api/playground/run
@@ -13,6 +14,11 @@ import { createClient } from '@/lib/supabase/server'
  * Cost: $0 (Groq free tier).
  */
 export async function POST(request: NextRequest) {
+  const rateLimit = checkRateLimit(request, 'ai')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   // Auth check
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

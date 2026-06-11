@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { logger } from "@/lib/logger";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -11,9 +13,14 @@ type RouteContext = {
  * Retrieve a single project by ID, including aggregated session statistics.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: RouteContext
 ) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   try {
     const { id: projectId } = await context.params;
     const supabase = await createClient();
@@ -88,7 +95,7 @@ export async function GET(
       { status: 200 }
     );
   } catch (error) {
-    console.error("GET /api/projects/[id] error:", error);
+    logger.error("GET /api/projects/[id] error", error as Error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -105,6 +112,11 @@ export async function PATCH(
   request: NextRequest,
   context: RouteContext
 ) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   try {
     const { id: projectId } = await context.params;
     const supabase = await createClient();
@@ -192,7 +204,7 @@ export async function PATCH(
       .single();
 
     if (updateError) {
-      console.error("Failed to update project:", updateError);
+      logger.error("Failed to update project", new Error(updateError.message));
       return NextResponse.json(
         { error: "Failed to update project" },
         { status: 500 }
@@ -201,7 +213,7 @@ export async function PATCH(
 
     return NextResponse.json({ project: updatedProject }, { status: 200 });
   } catch (error) {
-    console.error("PATCH /api/projects/[id] error:", error);
+    logger.error("PATCH /api/projects/[id] error", error as Error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -216,9 +228,14 @@ export async function PATCH(
  * handled at the database level via foreign key ON DELETE CASCADE.
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: RouteContext
 ) {
+  const rateLimit = checkRateLimit(request, 'write')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   try {
     const { id: projectId } = await context.params;
     const supabase = await createClient();
@@ -279,7 +296,7 @@ export async function DELETE(
       .eq("id", projectId);
 
     if (deleteError) {
-      console.error("Failed to delete project:", deleteError);
+      logger.error("Failed to delete project", new Error(deleteError.message));
       return NextResponse.json(
         { error: "Failed to delete project" },
         { status: 500 }
@@ -291,7 +308,7 @@ export async function DELETE(
       { status: 200 }
     );
   } catch (error) {
-    console.error("DELETE /api/projects/[id] error:", error);
+    logger.error("DELETE /api/projects/[id] error", error as Error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

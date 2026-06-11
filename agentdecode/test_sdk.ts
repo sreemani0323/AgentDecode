@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { AgentDecode } from './packages/sdk/dist/index.js'
+import { AgentDecode } from '../packages/sdk/dist/index.js'
 import crypto from 'crypto'
 import fs from 'fs'
 
@@ -79,17 +79,17 @@ async function runTest() {
   console.log('3. Initializing AgentDecode SDK...')
   const lens = new AgentDecode({
     apiKey: rawKey,
-    projectId: project.id,
     endpoint: 'http://localhost:3000/api/ingest',
   })
   
   console.log('4. Tracing a dummy function...')
   const sessionId = `test_session_${Date.now()}`
+  const session = lens.session({ sessionId })
   
-  const mockLLM = lens.trace(
+  const mockLLM = session.trace(
     'test_llm_call',
     { type: 'llm', model: 'gpt-4o' },
-    async (input: string) => {
+    async (span, input: string) => {
       console.log('   Inside the traced function...')
       await new Promise(resolve => setTimeout(resolve, 500))
       return `Response to: ${input}`
@@ -97,11 +97,13 @@ async function runTest() {
   )
   
   try {
-    const result = await mockLLM(sessionId, 'Hello SDK!')
+    const result = await mockLLM('Hello SDK!')
     console.log('   Function returned:', result)
   } catch (e) {
     console.error('Function failed:', e)
   }
+  
+  await session.end()
   
   console.log('5. Waiting 2 seconds for background ingest request to complete...')
   await new Promise(resolve => setTimeout(resolve, 2000))

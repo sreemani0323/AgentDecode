@@ -1,4 +1,5 @@
 import type { Span } from '@/types'
+import { logger } from '@/lib/logger'
 
 export async function explainSpanFailure(
   span: Span
@@ -27,7 +28,7 @@ Respond in JSON only:
   "suggested_fix": "1-2 sentences on what to fix"
 }`
 
-  console.log('1. Sending span to Gemini:', JSON.stringify(span, null, 2))
+  logger.debug('Sending span to Gemini for analysis', { span_id: span.id })
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`
@@ -42,12 +43,12 @@ Respond in JSON only:
 
     if (!res.ok) {
       const errorText = await res.text()
-      console.error('Gemini API error:', errorText)
+      logger.error('Gemini API error response', { errorText })
       throw new Error(`Gemini API returned ${res.status}`)
     }
 
     const data = await res.json()
-    console.log('2. Raw Gemini API response:', JSON.stringify(data, null, 2))
+    logger.debug('Gemini API response received', { data })
 
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text
     if (!text) {
@@ -67,7 +68,7 @@ Respond in JSON only:
       suggested_fix: parsed.suggested_fix || 'Review the span input and output manually.',
     }
   } catch (err) {
-    console.error('3. Error caught in Gemini analysis:', err)
+    logger.error('Error caught in Gemini analysis', err as Error)
     return {
       diagnosis: 'Could not analyze this failure automatically.',
       suggested_fix: 'Check the input/output above for clues.',

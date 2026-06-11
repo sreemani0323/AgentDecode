@@ -1,3 +1,5 @@
+import { logger } from '@/lib/logger'
+
 /**
  * Runtime environment validation for AgentDecode.
  * Called at startup or in API routes to surface missing config.
@@ -52,16 +54,18 @@ export function logEnvStatus(): void {
   const result = checkEnv()
   
   if (result.missing.length > 0) {
-    console.error('\n[AgentDecode] ❌ MISSING REQUIRED ENV VARS:')
-    result.missing.forEach(m => console.error(`  - ${m.key}: ${m.description}`))
+    logger.error('Missing required env vars', {
+      missing: result.missing.map(m => m.key),
+    })
   }
   
   if (result.warnings.length > 0) {
-    console.warn('\n[AgentDecode] ⚠️  Optional env vars not set (features will be degraded):')
-    result.warnings.forEach(w => console.warn(`  - ${w.key}: ${w.description}`))
+    logger.warn('Optional env vars not set (features will be degraded)', {
+      warnings: result.warnings.map(w => w.key),
+    })
   }
   
   if (result.ok && result.warnings.length === 0) {
-    console.log('\n[AgentDecode] ✅ All environment variables configured')
+    logger.info('All environment variables configured successfully')
   }
 }

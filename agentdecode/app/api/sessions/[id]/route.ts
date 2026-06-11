@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { logger } from "@/lib/logger";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -102,9 +104,14 @@ function buildSpanTree(spans: SpanRow[]): SpanTreeNode[] {
  * eval_scores, and ai_explanations.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: RouteContext
 ) {
+  const rateLimit = checkRateLimit(request, 'read')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   try {
     const { id: sessionId } = await context.params;
     const supabase = await createClient();
@@ -189,7 +196,7 @@ export async function GET(
       .order("start_time", { ascending: true });
 
     if (spansError) {
-      console.error("Failed to fetch spans:", spansError);
+      logger.error("Failed to fetch spans", new Error(spansError.message));
       return NextResponse.json(
         { error: "Failed to fetch spans" },
         { status: 500 }
@@ -209,7 +216,7 @@ export async function GET(
       { status: 200 }
     );
   } catch (error) {
-    console.error("GET /api/sessions/[id] error:", error);
+    logger.error("GET /api/sessions/[id] error", error as Error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

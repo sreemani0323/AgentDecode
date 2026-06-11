@@ -49,7 +49,7 @@ export default async function AnalyticsPage({
 
   // ── Fetch eval scores for these spans ─────────────────────────
   const spanIds = allSpans.map(s => s.id)
-  let evalScores: Array<{ span_id: string; score: number; flagged: boolean }> = []
+  const evalScores: Array<{ span_id: string; score: number; flagged: boolean }> = []
 
   if (spanIds.length > 0) {
     // Fetch in batches of 500 to avoid query limits

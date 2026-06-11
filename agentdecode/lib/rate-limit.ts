@@ -1,3 +1,5 @@
+import { NextResponse } from 'next/server'
+
 /**
  * In-memory Token Bucket Rate Limiter
  * 
@@ -28,7 +30,7 @@ const DEFAULT_CONFIG: RateLimiterConfig = {
   ttlMs: 5 * 60_000,  // Clean up buckets idle for 5 minutes
 }
 
-class RateLimiter {
+export class RateLimiter {
   private buckets = new Map<string, TokenBucket>()
   private config: RateLimiterConfig
   private lastCleanup = Date.now()
@@ -108,6 +110,24 @@ export const ingestRateLimiter = new RateLimiter({
   ttlMs: 5 * 60_000,
 })
 
+export const apiReadRateLimiter = new RateLimiter({
+  maxTokens: 100,  // Burst: 100 requests
+  refillRate: 10,  // Sustained: 10 req/s
+  ttlMs: 5 * 60_000,
+})
+
+export const apiWriteRateLimiter = new RateLimiter({
+  maxTokens: 30,   // Burst: 30 requests
+  refillRate: 3,    // Sustained: 3 req/s
+  ttlMs: 5 * 60_000,
+})
+
+export const aiRateLimiter = new RateLimiter({
+  maxTokens: 10,   // Burst: 10 requests
+  refillRate: 1,    // Sustained: 1 req/s
+  ttlMs: 5 * 60_000,
+})
+
 /**
  * Extract the client identifier from a request.
  * Prefers the API key (unique per project), falls back to IP.
@@ -123,4 +143,46 @@ export function getClientIdentifier(request: Request, apiKey?: string): string {
   if (realIp) return `ip:${realIp}`
 
   return 'ip:unknown'
+}
+
+/**
+ * Helper to check rate limit for a request based on route type.
+ * Returns { allowed: true } or { allowed: false, response: NextResponse }
+ */
+export function checkRateLimit(
+  request: Request,
+  type: 'read' | 'write' | 'ai' | 'ingest'
+): { allowed: true } | { allowed: false; response: NextResponse } {
+  const limiter =
+    type === 'read'
+      ? apiReadRateLimiter
+      : type === 'write'
+      ? apiWriteRateLimiter
+      : type === 'ai'
+      ? aiRateLimiter
+      : ingestRateLimiter
+
+  const clientId = getClientIdentifier(request)
+  const rateCheck = limiter.check(clientId)
+
+  if (!rateCheck.allowed) {
+    return {
+      allowed: false,
+      response: NextResponse.json(
+        {
+          error: 'Rate limit exceeded. Please slow down.',
+          retry_after_ms: rateCheck.retryAfterMs,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': Math.ceil(rateCheck.retryAfterMs / 1000).toString(),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      ),
+    }
+  }
+
+  return { allowed: true }
 }

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { AgentDecode } from './packages/sdk/dist/index.js'
+import { AgentDecode } from '../packages/sdk/dist/index.js'
 import crypto from 'crypto'
 import fs from 'fs'
 
@@ -71,40 +71,42 @@ async function runTests() {
   console.log(`2. SDK initialized for Project: ${project!.id}`)
   const lens = new AgentDecode({
     apiKey: rawKey,
-    projectId: project!.id,
     endpoint: 'http://localhost:3000/api/ingest',
   })
   
   const sessionId = `test_session_${Date.now()}`
+  const session = lens.session({ sessionId })
   
   console.log('3. Running Test Cases...')
-
+  
   // Case 1: Successful Tool Call
-  const mockTool = lens.trace('search_db', { type: 'tool' }, async (query: string) => {
+  const mockTool = session.trace('search_db', { type: 'tool' }, async (span, query: string) => {
     await new Promise(r => setTimeout(r, 100));
     return { results: ['item1', 'item2'] };
   })
-
+  
   // Case 2: Successful LLM Call
-  const mockLLM = lens.trace('generate_summary', { type: 'llm', model: 'gpt-4o' }, async (text: string) => {
+  const mockLLM = session.trace('generate_summary', { type: 'llm', model: 'gpt-4o' }, async (span, text: string) => {
     await new Promise(r => setTimeout(r, 150));
     return `Summary of: ${text}`;
   })
-
+  
   // Case 3: Failing Call
-  const mockFailingLLM = lens.trace('parse_json', { type: 'llm', model: 'gpt-3.5' }, async (text: string) => {
+  const mockFailingLLM = session.trace('parse_json', { type: 'llm', model: 'gpt-3.5' }, async (span, text: string) => {
     await new Promise(r => setTimeout(r, 50));
     throw new Error('Unexpected token in JSON');
   })
-
+  
   console.log('   Executing cases...');
-  await mockTool(sessionId, 'SELECT * FROM users');
-  await mockLLM(sessionId, 'Long document text here');
+  await mockTool('SELECT * FROM users');
+  await mockLLM('Long document text here');
   try {
-    await mockFailingLLM(sessionId, '{ bad_json }');
+    await mockFailingLLM('{ bad_json }');
   } catch (e) {
     // Expected to throw
   }
+  
+  await session.end()
 
   console.log('4. Waiting for spans to be ingested asynchronously (polling up to 10s)...');
   try {

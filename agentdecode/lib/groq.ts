@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
+import { logger } from '@/lib/logger'
 
 export async function scoreSpanWithGroq(spanId: string, input: any, output: any): Promise<void> {
   try {
@@ -63,6 +64,6 @@ Respond with JSON only, no markdown:
     })
   } catch (err) {
     // Silently fail — never crash ingest
-    console.error('[AgentDecode] Eval scoring failed:', err)
+    logger.error('Eval scoring failed with Groq', err as Error)
   }
 }

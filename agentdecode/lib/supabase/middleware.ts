@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { logger } from '@/lib/logger'
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -10,7 +11,7 @@ export async function updateSession(request: NextRequest) {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    console.warn('[AgentDecode Middleware] Missing Supabase environment variables.')
+    logger.warn('Missing Supabase environment variables in middleware')
     return { supabase: null, response: supabaseResponse }
   }
 
@@ -33,7 +34,7 @@ export async function updateSession(request: NextRequest) {
                 supabaseResponse.cookies.set(name, value, options)
               )
             } catch (cookieError) {
-              console.error('[AgentDecode Middleware] Failed to set cookies:', cookieError)
+              logger.error('Failed to set cookies in middleware', cookieError as Error)
             }
           },
         },
@@ -45,7 +46,7 @@ export async function updateSession(request: NextRequest) {
 
     return { supabase, response: supabaseResponse }
   } catch (error) {
-    console.error('[AgentDecode Middleware] Exception during updateSession:', error)
+    logger.error('Exception during updateSession in middleware', error as Error)
     return { supabase: null, response: supabaseResponse }
   }
 }

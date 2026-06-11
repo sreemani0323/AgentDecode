@@ -1,19 +1,37 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { updateSession } from './lib/supabase/middleware'
+import { logger } from './lib/logger'
 
 export async function middleware(request: NextRequest) {
   try {
     const { pathname } = request.nextUrl
 
-    // Skip auth for /api/ingest
-    if (pathname === '/api/ingest') {
-      return NextResponse.next()
+    // Security headers applied to all responses
+    const securityHeaders: Record<string, string> = {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'X-XSS-Protection': '1; mode=block',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    }
+
+    /** Apply security headers to a response and return it. */
+    function withSecurityHeaders(res: NextResponse): NextResponse {
+      for (const [key, value] of Object.entries(securityHeaders)) {
+        res.headers.set(key, value)
+      }
+      return res
+    }
+
+    // Skip auth for public API endpoints
+    if (pathname === '/api/ingest' || pathname === '/api/health' || pathname === '/api/docs') {
+      return withSecurityHeaders(NextResponse.next())
     }
 
     const { supabase, response } = await updateSession(request)
 
     if (!supabase) {
-      return response
+      return withSecurityHeaders(response)
     }
 
     let user = null
@@ -23,7 +41,7 @@ export async function middleware(request: NextRequest) {
       } = await supabase.auth.getUser()
       user = currentUser
     } catch (error) {
-      console.error('[AgentDecode Middleware] Failed to get user session:', error)
+      logger.error('Failed to get user session', error as Error, { context: 'middleware' })
     }
 
     // /(dashboard) routes -> if no session, redirect to /login
@@ -35,23 +53,23 @@ export async function middleware(request: NextRequest) {
     
     if (isDashboardRoute && !user) {
       const url = new URL('/login', request.url)
-      return NextResponse.redirect(url)
+      return withSecurityHeaders(NextResponse.redirect(url))
     }
 
     // /login and /signup -> if session exists, redirect to /dashboard
     if ((pathname === '/login' || pathname === '/signup') && user) {
       const url = new URL('/dashboard', request.url)
-      return NextResponse.redirect(url)
+      return withSecurityHeaders(NextResponse.redirect(url))
     }
 
     // all other /api/* routes -> if no session, return 401 JSON
     if (pathname.startsWith('/api/') && !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return withSecurityHeaders(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
     }
 
-    return response
+    return withSecurityHeaders(response)
   } catch (globalError) {
-    console.error('[AgentDecode Middleware] Global Unhandled Exception:', globalError)
+    logger.error('Global Unhandled Exception in Middleware', globalError as Error)
     // Fail-safe: return default response to avoid breaking the application for users
     return NextResponse.next()
   }

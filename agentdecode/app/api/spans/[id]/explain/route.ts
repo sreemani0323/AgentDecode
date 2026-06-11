@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { explainSpanFailure } from '@/lib/gemini'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rateLimit = checkRateLimit(request, 'ai')
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const { id: spanId } = await params
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
