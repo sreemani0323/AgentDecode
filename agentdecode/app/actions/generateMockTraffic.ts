@@ -376,8 +376,11 @@ export async function generateMockTraffic(projectId: string): Promise<{ success:
     return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Unauthorized' }
   }
 
-  // Look up the project's org_id and verify the user is a member
-  const { data: project } = await userSupabase
+  // Create service client to bypass RLS for membership lookup (Server Action cookie context issue)
+  const serviceSupabase = createServiceClient()
+
+  // Look up the project's org_id
+  const { data: project } = await serviceSupabase
     .from('projects')
     .select('org_id')
     .eq('id', projectId)
@@ -387,20 +390,19 @@ export async function generateMockTraffic(projectId: string): Promise<{ success:
     return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Project not found' }
   }
 
-  const { data: membership } = await userSupabase
+  const { data: membership } = await serviceSupabase
     .from('org_members')
-    .select('id')
+    .select('role')
     .eq('user_id', user.id)
     .eq('org_id', project.org_id)
-    .limit(1)
-    .single()
+    .maybeSingle()
 
   if (!membership) {
     return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Unauthorized' }
   }
 
   // ── Proceed with service client (bypasses RLS for bulk insert) ──
-  const supabase = createServiceClient()
+  const supabase = serviceSupabase
 
   let totalSessions = 0
   let totalSpans = 0
