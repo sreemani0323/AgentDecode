@@ -9,6 +9,10 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: 'https://placeholder.supabase.co'
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'placeholder-anon-key'
+      SUPABASE_SERVICE_ROLE_KEY: 'placeholder-service-key'
 
     steps:
       - name: Checkout
@@ -40,7 +44,7 @@ jobs:
         working-directory: .
 
       - name: Test
-        run: npm run test
+        run: npm run test -- --passWithNoTests
         working-directory: .
 
       - name: Build

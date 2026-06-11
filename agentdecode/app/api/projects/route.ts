@@ -18,6 +18,7 @@ export async function GET(request: Request) {
     .from('org_members')
     .select('org_id')
     .eq('user_id', user.id)
+    .limit(1)
     .single()
 
   if (!orgMember) {
@@ -76,6 +77,7 @@ export async function POST(request: Request) {
       .from('org_members')
       .select('org_id')
       .eq('user_id', user.id)
+      .limit(1)
       .single()
 
     if (!orgMember) {

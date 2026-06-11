@@ -70,8 +70,14 @@ export async function middleware(request: NextRequest) {
     return withSecurityHeaders(response)
   } catch (globalError) {
     logger.error('Global Unhandled Exception in Middleware', globalError as Error)
-    // Fail-safe: return default response to avoid breaking the application for users
-    return NextResponse.next()
+    // Fail-closed: deny access when middleware encounters an unexpected error
+    const { pathname } = request.nextUrl
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    // For browser requests, redirect to login as a safe fallback
+    const url = new URL('/login', request.url)
+    return NextResponse.redirect(url)
   }
 }
 

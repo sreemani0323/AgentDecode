@@ -131,9 +131,19 @@ export const aiRateLimiter = new RateLimiter({
 /**
  * Extract the client identifier from a request.
  * Prefers the API key (unique per project), falls back to IP.
+ * API keys are hashed so raw secrets are never stored in the in-memory rate limiter map.
  */
 export function getClientIdentifier(request: Request, apiKey?: string): string {
-  if (apiKey) return `key:${apiKey}`
+  if (apiKey) {
+    // Fast non-crypto hash for bucketing — raw key never stored in memory
+    let hash = 0
+    for (let i = 0; i < apiKey.length; i++) {
+      const chr = apiKey.charCodeAt(i)
+      hash = ((hash << 5) - hash) + chr
+      hash |= 0 // Convert to 32-bit integer
+    }
+    return `key:${hash.toString(36)}`
+  }
 
   // Check forwarded headers (Vercel, Cloudflare, etc.)
   const forwarded = request.headers.get('x-forwarded-for')

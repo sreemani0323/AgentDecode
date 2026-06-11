@@ -10,6 +10,7 @@ export async function sendAlertEmail(to: string, subject: string, body: string):
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${resendApiKey}`,
         'Content-Type': 'application/json',
@@ -40,6 +41,7 @@ export async function testEmailAlert(to: string): Promise<{ success: boolean; er
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${resendApiKey}`,
         'Content-Type': 'application/json',

@@ -47,24 +47,74 @@ function CollapsibleSection({
   )
 }
 
+/**
+ * Safe JSON syntax highlighting using React elements (no dangerouslySetInnerHTML).
+ * Tokenizes JSON string into colored spans to prevent XSS from untrusted payloads.
+ */
 function JsonDisplay({ data }: { data: any }) {
   if (!data) return <div className="p-4 text-sm text-muted-foreground">null</div>
 
   const jsonStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
 
-  // Simple syntax coloring
-  const colorized = jsonStr
-    .replace(/"([^"]+)":/g, '<span style="color: #93c5fd">"$1"</span>:')
-    .replace(/: "([^"]*?)"/g, ': <span style="color: #86efac">"$1"</span>')
-    .replace(/: (\d+\.?\d*)/g, ': <span style="color: #fde68a">$1</span>')
-    .replace(/: (true|false)/g, ': <span style="color: #c4b5fd">$1</span>')
-    .replace(/: (null)/g, ': <span style="color: #9ca3af">$1</span>')
+  // Tokenize the JSON string into typed segments for safe rendering
+  const tokenize = (str: string): React.ReactNode[] => {
+    const tokens: React.ReactNode[] = []
+    // Match JSON tokens: strings, numbers, booleans, null, or other characters
+    const regex = /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b)|(\bnull\b)|([{}[\]:,\s]+)/g
+    let match: RegExpExecArray | null
+    let lastIndex = 0
+
+    while ((match = regex.exec(str)) !== null) {
+      // Capture any unmatched text between tokens
+      if (match.index > lastIndex) {
+        tokens.push(str.slice(lastIndex, match.index))
+      }
+      lastIndex = regex.lastIndex
+
+      if (match[1]) {
+        // Property key (string followed by colon)
+        tokens.push(
+          <span key={tokens.length} style={{ color: '#93c5fd' }}>{match[1]}</span>,
+          ':'
+        )
+      } else if (match[2]) {
+        // String value
+        tokens.push(
+          <span key={tokens.length} style={{ color: '#86efac' }}>{match[2]}</span>
+        )
+      } else if (match[3]) {
+        // Number
+        tokens.push(
+          <span key={tokens.length} style={{ color: '#fde68a' }}>{match[3]}</span>
+        )
+      } else if (match[4]) {
+        // Boolean
+        tokens.push(
+          <span key={tokens.length} style={{ color: '#c4b5fd' }}>{match[4]}</span>
+        )
+      } else if (match[5]) {
+        // Null
+        tokens.push(
+          <span key={tokens.length} style={{ color: '#9ca3af' }}>{match[5]}</span>
+        )
+      } else if (match[6]) {
+        // Structural characters and whitespace
+        tokens.push(match[6])
+      }
+    }
+
+    // Any remaining unmatched text
+    if (lastIndex < str.length) {
+      tokens.push(str.slice(lastIndex))
+    }
+
+    return tokens
+  }
 
   return (
-    <pre
-      className="p-4 bg-background/80 text-sm font-mono overflow-x-auto whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto"
-      dangerouslySetInnerHTML={{ __html: colorized }}
-    />
+    <pre className="p-4 bg-background/80 text-sm font-mono overflow-x-auto whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto">
+      {tokenize(jsonStr)}
+    </pre>
   )
 }
 

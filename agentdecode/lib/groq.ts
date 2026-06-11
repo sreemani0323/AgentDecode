@@ -18,6 +18,7 @@ Respond with JSON only, no markdown:
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
+      signal: AbortSignal.timeout(15000),
       headers: {
         'Authorization': `Bearer ${groqApiKey}`,
         'Content-Type': 'application/json',

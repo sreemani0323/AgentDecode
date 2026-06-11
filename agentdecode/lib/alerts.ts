@@ -2,6 +2,10 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { sendAlertEmail } from '@/lib/resend'
 import { logger } from '@/lib/logger'
 
+// In-memory cooldown tracker to prevent alert spam.
+// Resets on cold start, which is acceptable — better to re-fire once than spam continuously.
+const alertCooldowns = new Map<string, number>()
+
 export async function checkAndFireAlerts(projectId: string): Promise<void> {
   try {
     const supabase = createServiceClient()
@@ -42,11 +46,16 @@ export async function checkAndFireAlerts(projectId: string): Promise<void> {
           const errorRate = (errorCount / sessions.length) * 100
 
           if (errorRate > rule.threshold) {
+            const cooldownMs = rule.window_minutes * 60 * 1000
+            const lastFired = alertCooldowns.get(rule.id) || 0
+            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
+
             await sendAlertEmail(
               rule.notify_email,
               `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
               `Alert: ${rule.name}\n\nMetric: Error Rate\nCurrent Value: ${errorRate.toFixed(1)}%\nThreshold: ${rule.threshold}%\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
             )
+            alertCooldowns.set(rule.id, Date.now())
           }
         } else if (rule.metric === 'latency_p95') {
           // Get span durations in window
@@ -64,11 +73,16 @@ export async function checkAndFireAlerts(projectId: string): Promise<void> {
           const p95 = spans[p95Index]?.duration_ms || 0
 
           if (p95 > rule.threshold) {
+            const cooldownMs = rule.window_minutes * 60 * 1000
+            const lastFired = alertCooldowns.get(rule.id) || 0
+            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
+
             await sendAlertEmail(
               rule.notify_email,
               `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
               `Alert: ${rule.name}\n\nMetric: P95 Latency\nCurrent Value: ${p95}ms\nThreshold: ${rule.threshold}ms\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
             )
+            alertCooldowns.set(rule.id, Date.now())
           }
         } else if (rule.metric === 'cost_spike') {
           // Sum cost in window
@@ -84,11 +98,16 @@ export async function checkAndFireAlerts(projectId: string): Promise<void> {
           const totalCost = spans.reduce((sum: number, s: any) => sum + (s.cost_usd || 0), 0)
 
           if (totalCost > rule.threshold) {
+            const cooldownMs = rule.window_minutes * 60 * 1000
+            const lastFired = alertCooldowns.get(rule.id) || 0
+            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
+
             await sendAlertEmail(
               rule.notify_email,
               `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
               `Alert: ${rule.name}\n\nMetric: Cost Spike\nCurrent Value: $${totalCost.toFixed(4)}\nThreshold: $${rule.threshold}\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
             )
+            alertCooldowns.set(rule.id, Date.now())
           }
         }
       } catch (ruleErr) {

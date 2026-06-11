@@ -70,40 +70,45 @@ export default async function ProjectPage({
     .order('started_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
-  // Fetch eval quality data for sessions
-  const sessionsWithQuality = await Promise.all(
-    (sessions || []).map(async (session: any) => {
-      // Check if session has LLM spans
-      const { data: llmSpans } = await supabase
+  // Batch-fetch eval quality data for all sessions on this page (fixes N+1)
+  const sessionIds = (sessions || []).map((s: any) => s.id)
+
+  // Single query: get all LLM spans for every session on this page
+  const { data: allLlmSpans } = sessionIds.length > 0
+    ? await supabase
         .from('spans')
-        .select('id')
-        .eq('session_id', session.id)
+        .select('id, session_id')
+        .in('session_id', sessionIds)
         .eq('span_type', 'llm')
-        .limit(1)
+    : { data: [] }
 
-      const hasLlmSpans = (llmSpans?.length || 0) > 0
+  // Build lookup: session_id → set of llm span ids
+  const llmSpansBySession = new Map<string, string[]>()
+  for (const span of allLlmSpans || []) {
+    const list = llmSpansBySession.get(span.session_id) || []
+    list.push(span.id)
+    llmSpansBySession.set(span.session_id, list)
+  }
 
-      let hasLowQuality = false
-      if (hasLlmSpans) {
-        // Check if any eval scores are flagged
-        const { data: flagged } = await supabase
-          .from('eval_scores')
-          .select('span_id')
-          .in('span_id', (await supabase
-            .from('spans')
-            .select('id')
-            .eq('session_id', session.id)
-            .eq('span_type', 'llm')
-          ).data?.map((s: any) => s.id) || [])
-          .eq('flagged', true)
-          .limit(1)
+  // Single query: check which of those LLM spans have flagged eval scores
+  const allLlmSpanIds = (allLlmSpans || []).map((s: any) => s.id)
+  const { data: flaggedScores } = allLlmSpanIds.length > 0
+    ? await supabase
+        .from('eval_scores')
+        .select('span_id')
+        .in('span_id', allLlmSpanIds)
+        .eq('flagged', true)
+    : { data: [] }
 
-        hasLowQuality = (flagged?.length || 0) > 0
-      }
+  const flaggedSpanIds = new Set((flaggedScores || []).map((f: any) => f.span_id))
 
-      return { ...session, hasLlmSpans, hasLowQuality }
-    })
-  )
+  // Assemble quality flags in-memory
+  const sessionsWithQuality = (sessions || []).map((session: any) => {
+    const llmSpanIds = llmSpansBySession.get(session.id) || []
+    const hasLlmSpans = llmSpanIds.length > 0
+    const hasLowQuality = hasLlmSpans && llmSpanIds.some((id) => flaggedSpanIds.has(id))
+    return { ...session, hasLlmSpans, hasLowQuality }
+  })
 
   // Fetch all sessions for stats
   const { data: allSessions } = await supabase

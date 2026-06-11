@@ -1,6 +1,6 @@
 "use server"
 
-import { createServiceClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { scoreSpanWithGroq } from '@/lib/groq'
 import { logger } from '@/lib/logger'
 
@@ -368,6 +368,38 @@ function flattenSpans(
 // ─── Main server action ──────────────────────────────────────────
 
 export async function generateMockTraffic(projectId: string): Promise<{ success: boolean; sessionsCreated: number; spansCreated: number; error?: string }> {
+  // ── Auth check: verify the calling user has access to this project ──
+  const userSupabase = await createClient()
+  const { data: { user } } = await userSupabase.auth.getUser()
+
+  if (!user) {
+    return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Unauthorized' }
+  }
+
+  // Look up the project's org_id and verify the user is a member
+  const { data: project } = await userSupabase
+    .from('projects')
+    .select('org_id')
+    .eq('id', projectId)
+    .single()
+
+  if (!project) {
+    return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Project not found' }
+  }
+
+  const { data: membership } = await userSupabase
+    .from('org_members')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('org_id', project.org_id)
+    .limit(1)
+    .single()
+
+  if (!membership) {
+    return { success: false, sessionsCreated: 0, spansCreated: 0, error: 'Unauthorized' }
+  }
+
+  // ── Proceed with service client (bypasses RLS for bulk insert) ──
   const supabase = createServiceClient()
 
   let totalSessions = 0

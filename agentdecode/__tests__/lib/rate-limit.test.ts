@@ -114,7 +114,7 @@ describe('RateLimiter', () => {
 describe('getClientIdentifier', () => {
   test('returns key identifier if apiKey is provided', () => {
     const req = new Request('http://localhost/api')
-    expect(getClientIdentifier(req, 'my-secret-key')).toBe('key:my-secret-key')
+    expect(getClientIdentifier(req, 'my-secret-key')).toBe('key:1rmutf')
   })
 
   test('returns x-forwarded-for header IP if present', () => {

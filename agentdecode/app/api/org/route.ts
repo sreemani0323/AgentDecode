@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
       .from('org_members')
       .select('*, organizations(*)')
       .eq('user_id', user.id)
+      .limit(1)
       .single();
 
     if (memberError || !membership) {
@@ -68,12 +69,12 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Verify user is an owner of the organization
     const { data: membership, error: memberError } = await supabase
       .from('org_members')
       .select('org_id, role')
       .eq('user_id', user.id)
       .eq('role', 'owner')
+      .limit(1)
       .single();
 
     if (memberError || !membership) {
