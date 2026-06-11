@@ -89,7 +89,7 @@ async function runTest() {
   const mockLLM = session.trace(
     'test_llm_call',
     { type: 'llm', model: 'gpt-4o' },
-    async (span, input: string) => {
+    async (span: any, input: string) => {
       console.log('   Inside the traced function...')
       await new Promise(resolve => setTimeout(resolve, 500))
       return `Response to: ${input}`

@@ -36,6 +36,10 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "test_sdk.ts",
+    "test_sdk_advanced.ts",
+    "test_query.ts",
+    "test_query2.ts"
   ]
 }

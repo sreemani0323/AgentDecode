@@ -80,19 +80,19 @@ async function runTests() {
   console.log('3. Running Test Cases...')
   
   // Case 1: Successful Tool Call
-  const mockTool = session.trace('search_db', { type: 'tool' }, async (span, query: string) => {
+  const mockTool = session.trace('search_db', { type: 'tool' }, async (span: any, query: string) => {
     await new Promise(r => setTimeout(r, 100));
     return { results: ['item1', 'item2'] };
   })
   
   // Case 2: Successful LLM Call
-  const mockLLM = session.trace('generate_summary', { type: 'llm', model: 'gpt-4o' }, async (span, text: string) => {
+  const mockLLM = session.trace('generate_summary', { type: 'llm', model: 'gpt-4o' }, async (span: any, text: string) => {
     await new Promise(r => setTimeout(r, 150));
     return `Summary of: ${text}`;
   })
   
   // Case 3: Failing Call
-  const mockFailingLLM = session.trace('parse_json', { type: 'llm', model: 'gpt-3.5' }, async (span, text: string) => {
+  const mockFailingLLM = session.trace('parse_json', { type: 'llm', model: 'gpt-3.5' }, async (span: any, text: string) => {
     await new Promise(r => setTimeout(r, 50));
     throw new Error('Unexpected token in JSON');
   })
