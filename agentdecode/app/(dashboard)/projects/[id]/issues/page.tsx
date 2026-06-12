@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Fragment } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
@@ -257,9 +257,8 @@ export default function ProjectIssuesPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {filteredIssues.map((issue) => (
-                <>
+                <Fragment key={issue.id}>
                   <tr
-                    key={issue.id}
                     className="hover:bg-muted/20 transition-colors cursor-pointer group"
                     onClick={() => toggleExpand(issue.id)}
                   >
@@ -410,7 +409,7 @@ export default function ProjectIssuesPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>

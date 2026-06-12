@@ -119,7 +119,11 @@ export async function POST(request: Request) {
   const adminSupabase = createServiceClient()
 
   // Search for user by email using the auth admin API
-  const { data: authUsers, error: authError } = await adminSupabase.auth.admin.listUsers()
+  // Use a large page size to avoid missing users beyond the default page 1
+  const { data: authUsers, error: authError } = await adminSupabase.auth.admin.listUsers({
+    page: 1,
+    perPage: 1000,
+  })
 
   if (authError) {
     return NextResponse.json({ error: 'Failed to look up user' }, { status: 500 })

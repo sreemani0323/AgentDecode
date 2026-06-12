@@ -6,8 +6,8 @@ import { z } from 'zod'
 
 const SpanSchema = z.object({
   name: z.string().min(1, 'Span name is required'),
-  span_type: z.enum(['llm', 'tool', 'retrieval', 'chain', 'agent', 'embedding', 'rerank', 'guardrail', 'other']).default('chain'),
-  status: z.enum(['ok', 'error', 'running']).default('ok'),
+  span_type: z.enum(['llm', 'tool', 'chain', 'retrieval', 'agent']).default('chain'),
+  status: z.enum(['ok', 'error']).default('ok'),
   started_at: z.string().datetime({ message: 'started_at must be ISO 8601' }),
   ended_at: z.string().datetime({ message: 'ended_at must be ISO 8601' }).optional().nullable(),
   duration_ms: z.number().nonnegative().optional().nullable(),

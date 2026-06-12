@@ -12,44 +12,43 @@ interface SpanRow {
   session_id: string;
   project_id: string;
   parent_span_id: string | null;
-  trace_id: string | null;
   name: string;
-  kind: string;
+  span_type: string;
   status: string;
-  start_time: string;
-  end_time: string | null;
+  started_at: string;
+  ended_at: string | null;
   duration_ms: number | null;
   input: unknown;
   output: unknown;
   model: string | null;
-  tokens_in: number;
-  tokens_out: number;
+  input_tokens: number;
+  output_tokens: number;
   cost_usd: number;
   error_message: string | null;
   metadata: unknown;
   created_at: string;
-  eval_scores: EvalScore[];
-  ai_explanations: AiExplanation[];
+  eval_scores: EvalScore | null;
+  ai_explanations: AiExplanation | null;
 }
 
 interface EvalScore {
-  id: string;
-  name: string;
+  span_id: string;
   score: number;
-  reason: string | null;
-  created_at: string;
+  reasoning: string | null;
+  flagged: boolean;
+  generated_at: string;
 }
 
 interface AiExplanation {
-  id: string;
-  explanation: string;
-  model_used: string | null;
-  created_at: string;
+  span_id: string;
+  diagnosis: string;
+  suggested_fix: string;
+  generated_at: string;
 }
 
 interface SpanTreeNode extends Omit<SpanRow, "eval_scores" | "ai_explanations"> {
-  eval_scores: EvalScore[];
-  ai_explanations: AiExplanation[];
+  eval_scores: EvalScore | null;
+  ai_explanations: AiExplanation | null;
   children: SpanTreeNode[];
 }
 
@@ -85,7 +84,7 @@ function buildSpanTree(spans: SpanRow[]): SpanTreeNode[] {
   function sortChildren(nodes: SpanTreeNode[]) {
     nodes.sort(
       (a, b) =>
-        new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+        new Date(a.started_at).getTime() - new Date(b.started_at).getTime()
     );
     for (const node of nodes) {
       sortChildren(node.children);
@@ -178,22 +177,22 @@ export async function GET(
         `
         *,
         eval_scores (
-          id,
-          name,
+          span_id,
           score,
-          reason,
-          created_at
+          reasoning,
+          flagged,
+          generated_at
         ),
         ai_explanations (
-          id,
-          explanation,
-          model_used,
-          created_at
+          span_id,
+          diagnosis,
+          suggested_fix,
+          generated_at
         )
       `
       )
       .eq("session_id", sessionId)
-      .order("start_time", { ascending: true });
+      .order("started_at", { ascending: true });
 
     if (spansError) {
       logger.error("Failed to fetch spans", new Error(spansError.message));

@@ -54,7 +54,9 @@ function ChartSection({ title, children }: { title: string; children: React.Reac
   return (
     <div className="rounded-xl border border-border bg-card p-6 space-y-4">
       <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">{title}</h3>
-      {children}
+      <div className="w-full min-h-[300px]">
+        {children}
+      </div>
     </div>
   )
 }
@@ -86,35 +88,37 @@ export default function AnalyticsCharts({
         {/* Cost by Model — Donut Chart */}
         <ChartSection title="Cost by Model">
           {costByModel.length > 0 ? (
-            <div className="flex items-center gap-6">
-              <ResponsiveContainer width="50%" height={200}>
-                <PieChart>
-                  <Pie
-                    data={costByModel}
-                    dataKey="cost"
-                    nameKey="model"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={3}
-                    strokeWidth={0}
-                  >
-                    {costByModel.map((_, i) => (
-                      <Cell key={i} fill={MODEL_COLORS[i % MODEL_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
-                    contentStyle={{
-                      background: 'var(--card)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="flex items-center gap-6 h-[280px]">
+              <div className="w-1/2 h-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={costByModel}
+                      dataKey="cost"
+                      nameKey="model"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      strokeWidth={0}
+                    >
+                      {costByModel.map((_, i) => (
+                        <Cell key={i} fill={MODEL_COLORS[i % MODEL_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
+                      contentStyle={{
+                        background: 'var(--card)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
               <div className="flex-1 space-y-2">
                 {costByModel.map((item, i) => (
                   <div key={item.model} className="flex items-center gap-2">
@@ -129,37 +133,39 @@ export default function AnalyticsCharts({
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground h-[200px] flex items-center justify-center">No cost data</p>
+            <p className="text-sm text-muted-foreground h-[280px] flex items-center justify-center">No cost data</p>
           )}
         </ChartSection>
 
         {/* Span Type Distribution — Bar Chart */}
         <ChartSection title="Span Type Distribution">
           {spanTypeData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={spanTypeData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
-                <XAxis
-                  dataKey="type"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#6b6960', fontSize: 11 }}
-                />
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#6b6960', fontSize: 11 }}
-                />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                  {spanTypeData.map((entry) => (
-                    <Cell key={entry.type} fill={SPAN_TYPE_COLORS[entry.type] || '#6b6960'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="h-[280px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={spanTypeData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
+                  <XAxis
+                    dataKey="type"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#6b6960', fontSize: 11 }}
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#6b6960', fontSize: 11 }}
+                  />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                    {spanTypeData.map((entry) => (
+                      <Cell key={entry.type} fill={SPAN_TYPE_COLORS[entry.type] || '#6b6960'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           ) : (
-            <p className="text-sm text-muted-foreground h-[200px] flex items-center justify-center">No span data</p>
+            <p className="text-sm text-muted-foreground h-[280px] flex items-center justify-center">No span data</p>
           )}
         </ChartSection>
       </div>
@@ -168,133 +174,139 @@ export default function AnalyticsCharts({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Latency P50/P95 Trend */}
         <ChartSection title="Latency Trend (P50 / P95)">
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={latencyTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="p50Gradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#197066" stopOpacity={0.15} />
-                  <stop offset="100%" stopColor="#197066" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="p95Gradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#d97706" stopOpacity={0.15} />
-                  <stop offset="100%" stopColor="#d97706" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
-              <XAxis
-                dataKey="label"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: '#6b6960', fontSize: 10 }}
-              />
-              <YAxis
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: '#6b6960', fontSize: 10 }}
-                tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`}
-              />
-              <Tooltip content={<ChartTooltip suffix="ms" />} />
-              <Legend
-                iconType="circle"
-                iconSize={8}
-                wrapperStyle={{ fontSize: '11px', color: '#6b6960' }}
-              />
-              <Area
-                type="monotone"
-                dataKey="p50"
-                name="P50"
-                stroke="#197066"
-                strokeWidth={2}
-                fill="url(#p50Gradient)"
-                dot={false}
-              />
-              <Area
-                type="monotone"
-                dataKey="p95"
-                name="P95"
-                stroke="#d97706"
-                strokeWidth={2}
-                fill="url(#p95Gradient)"
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={latencyTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="p50Gradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#197066" stopOpacity={0.15} />
+                    <stop offset="100%" stopColor="#197066" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="p95Gradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#d97706" stopOpacity={0.15} />
+                    <stop offset="100%" stopColor="#d97706" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
+                <XAxis
+                  dataKey="label"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#6b6960', fontSize: 10 }}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#6b6960', fontSize: 10 }}
+                  tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`}
+                />
+                <Tooltip content={<ChartTooltip suffix="ms" />} />
+                <Legend
+                  iconType="circle"
+                  iconSize={8}
+                  wrapperStyle={{ fontSize: '11px', color: '#6b6960' }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="p50"
+                  name="P50"
+                  stroke="#197066"
+                  strokeWidth={2}
+                  fill="url(#p50Gradient)"
+                  dot={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="p95"
+                  name="P95"
+                  stroke="#d97706"
+                  strokeWidth={2}
+                  fill="url(#p95Gradient)"
+                  dot={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </ChartSection>
 
         {/* Daily Cost Trend */}
         <ChartSection title="Daily Cost">
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={costTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#2563eb" stopOpacity={0.15} />
-                  <stop offset="100%" stopColor="#2563eb" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
-              <XAxis
-                dataKey="label"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: '#6b6960', fontSize: 10 }}
-              />
-              <YAxis
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: '#6b6960', fontSize: 10 }}
-                tickFormatter={(v: number) => `$${v.toFixed(3)}`}
-              />
-              <Tooltip
-                formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
-                contentStyle={{
-                  background: 'var(--card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="cost"
-                name="Cost"
-                stroke="#2563eb"
-                strokeWidth={2}
-                fill="url(#costGradient)"
-                dot={{ r: 3, fill: '#2563eb', strokeWidth: 0 }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={costTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#2563eb" stopOpacity={0.15} />
+                    <stop offset="100%" stopColor="#2563eb" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
+                <XAxis
+                  dataKey="label"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#6b6960', fontSize: 10 }}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#6b6960', fontSize: 10 }}
+                  tickFormatter={(v: number) => `$${v.toFixed(3)}`}
+                />
+                <Tooltip
+                  formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="cost"
+                  name="Cost"
+                  stroke="#2563eb"
+                  strokeWidth={2}
+                  fill="url(#costGradient)"
+                  dot={{ r: 3, fill: '#2563eb', strokeWidth: 0 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </ChartSection>
       </div>
 
       {/* Row 3: Eval Score Distribution */}
       <ChartSection title="Eval Score Distribution">
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={scoreBuckets} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
-            <XAxis
-              dataKey="label"
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: '#6b6960', fontSize: 11 }}
-              label={{ value: 'Score', position: 'insideBottom', offset: -5, style: { fill: '#9e9b92', fontSize: 10 } }}
-            />
-            <YAxis
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: '#6b6960', fontSize: 11 }}
-              label={{ value: 'Count', angle: -90, position: 'insideLeft', offset: 30, style: { fill: '#9e9b92', fontSize: 10 } }}
-            />
-            <Tooltip content={<ChartTooltip />} />
-            <Bar dataKey="count" name="Spans" radius={[4, 4, 0, 0]}>
-              {scoreBuckets.map((entry, i) => {
-                const score = parseInt(entry.label)
-                const color = score >= 7 ? '#059669' : score >= 5 ? '#d97706' : '#ef4444'
-                return <Cell key={i} fill={color} />
-              })}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+        <div className="h-[300px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={scoreBuckets} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3dc" />
+              <XAxis
+                dataKey="label"
+                axisLine={false}
+                tickLine={false}
+                tick={{ fill: '#6b6960', fontSize: 11 }}
+                label={{ value: 'Score', position: 'insideBottom', offset: -5, style: { fill: '#9e9b92', fontSize: 10 } }}
+              />
+              <YAxis
+                axisLine={false}
+                tickLine={false}
+                tick={{ fill: '#6b6960', fontSize: 11 }}
+                label={{ value: 'Count', angle: -90, position: 'insideLeft', offset: 30, style: { fill: '#9e9b92', fontSize: 10 } }}
+              />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar dataKey="count" name="Spans" radius={[4, 4, 0, 0]}>
+                {scoreBuckets.map((entry, i) => {
+                  const score = parseInt(entry.label)
+                  const color = score >= 7 ? '#059669' : score >= 5 ? '#d97706' : '#ef4444'
+                  return <Cell key={i} fill={color} />
+                })}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </ChartSection>
     </div>
   )

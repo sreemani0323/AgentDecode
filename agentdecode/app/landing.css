@@ -1062,7 +1062,8 @@
    ══════════════════════════════════════════ */
 
 .lp-footer {
-  background: var(--color-text-1);
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
   padding: var(--space-9) var(--gutter) var(--space-7);
 }
 
@@ -1084,7 +1085,7 @@
   font-family: var(--font-display);
   font-size: 1.15rem;
   font-weight: 700;
-  color: #ffffff;
+  color: #111827;
   letter-spacing: -0.02em;
   display: flex;
   align-items: center;
@@ -1097,7 +1098,7 @@
 
 .lp-footer-desc {
   font-size: var(--text-sm);
-  color: rgba(255, 255, 255, 0.5);
+  color: #6b7280;
   line-height: 1.6;
   max-width: 32ch;
 }
@@ -1105,7 +1106,7 @@
 .lp-footer-col-title {
   font-size: var(--text-sm);
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.85);
+  color: #374151;
   margin-bottom: var(--space-4);
   letter-spacing: 0.02em;
 }
@@ -1119,19 +1120,19 @@
 
 .lp-footer-links a {
   font-size: var(--text-sm);
-  color: rgba(255, 255, 255, 0.5);
+  color: #6b7280;
   transition: color 0.15s ease;
 }
 
 .lp-footer-links a:hover {
-  color: rgba(255, 255, 255, 0.85);
+  color: #111827;
 }
 
 .lp-footer-bottom {
   max-width: var(--container);
   margin: var(--space-7) auto 0;
   padding-top: var(--space-6);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1139,7 +1140,7 @@
 
 .lp-footer-copyright {
   font-size: var(--text-xs);
-  color: rgba(255, 255, 255, 0.35);
+  color: #9ca3af;
 }
 
 .lp-footer-bottom-links {
@@ -1149,12 +1150,12 @@
 
 .lp-footer-bottom-links a {
   font-size: var(--text-xs);
-  color: rgba(255, 255, 255, 0.35);
+  color: #9ca3af;
   transition: color 0.15s ease;
 }
 
 .lp-footer-bottom-links a:hover {
-  color: rgba(255, 255, 255, 0.7);
+  color: #374151;
 }
 
 

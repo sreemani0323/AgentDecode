@@ -60,7 +60,7 @@ export async function PATCH(
     // Verify user has access to this organization
     const { data: membership, error: memberError } = await supabase
       .from('org_members')
-      .select('id')
+      .select('org_id')
       .eq('org_id', project.org_id)
       .eq('user_id', user.id)
       .single();
