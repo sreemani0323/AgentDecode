@@ -33,13 +33,23 @@ Respond in JSON only:
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    })
+    // 10s AbortController timeout
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
+    let res: Response
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+        }),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
 
     if (!res.ok) {
       const errorText = await res.text()
@@ -61,17 +71,30 @@ Respond in JSON only:
       .replace(/```\s*/g, '')
       .trim()
 
-    const parsed = JSON.parse(text)
+    // Robust JSON parsing with validation
+    let diagnosis: string
+    let suggested_fix: string
 
-    return {
-      diagnosis: parsed.diagnosis || 'Could not determine root cause.',
-      suggested_fix: parsed.suggested_fix || 'Review the span input and output manually.',
+    try {
+      const parsed = JSON.parse(text)
+      diagnosis = typeof parsed.diagnosis === 'string' && parsed.diagnosis.length > 0
+        ? parsed.diagnosis
+        : 'Could not determine root cause.'
+      suggested_fix = typeof parsed.suggested_fix === 'string' && parsed.suggested_fix.length > 0
+        ? parsed.suggested_fix
+        : 'Review the span input and output manually.'
+    } catch {
+      // JSON parse failed — use fallback
+      diagnosis = 'Analysis unavailable'
+      suggested_fix = 'Check the error message above'
     }
+
+    return { diagnosis, suggested_fix }
   } catch (err) {
     logger.error('Error caught in Gemini analysis', err as Error)
     return {
-      diagnosis: 'Could not analyze this failure automatically.',
-      suggested_fix: 'Check the input/output above for clues.',
+      diagnosis: 'Analysis unavailable',
+      suggested_fix: 'Check the error message above',
     }
   }
 }

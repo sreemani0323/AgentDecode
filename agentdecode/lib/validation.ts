@@ -12,6 +12,8 @@ const SpanSchema = z.object({
   ended_at: z.string().datetime({ message: 'ended_at must be ISO 8601' }).optional().nullable(),
   duration_ms: z.number().nonnegative().optional().nullable(),
   parent_span_id: z.string().uuid().optional().nullable(),
+  client_span_id: z.string().min(1).optional().nullable(),
+  parent_client_span_id: z.string().min(1).optional().nullable(),
   model: z.string().optional().nullable(),
   input: z.unknown().optional().nullable(),
   output: z.unknown().optional().nullable(),

@@ -48,72 +48,128 @@ function CollapsibleSection({
 }
 
 /**
- * Safe JSON syntax highlighting using React elements (no dangerouslySetInnerHTML).
- * Tokenizes JSON string into colored spans to prevent XSS from untrusted payloads.
+ * Safe recursive JSON viewer — renders each value as React elements.
+ * Never uses dangerouslySetInnerHTML. Objects/arrays have expand/collapse toggles.
  */
-function JsonDisplay({ data }: { data: any }) {
-  if (!data) return <div className="p-4 text-sm text-muted-foreground">null</div>
+function JsonNode({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  const [collapsed, setCollapsed] = useState(depth > 2)
 
-  const jsonStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
+  if (value === null || value === undefined) {
+    return <span style={{ color: '#9ca3af' }}>null</span>
+  }
 
-  // Tokenize the JSON string into typed segments for safe rendering
-  const tokenize = (str: string): React.ReactNode[] => {
-    const tokens: React.ReactNode[] = []
-    // Match JSON tokens: strings, numbers, booleans, null, or other characters
-    const regex = /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b)|(\bnull\b)|([{}[\]:,\s]+)/g
-    let match: RegExpExecArray | null
-    let lastIndex = 0
+  if (typeof value === 'string') {
+    return <span style={{ color: '#86efac' }}>&quot;{value}&quot;</span>
+  }
 
-    while ((match = regex.exec(str)) !== null) {
-      // Capture any unmatched text between tokens
-      if (match.index > lastIndex) {
-        tokens.push(str.slice(lastIndex, match.index))
-      }
-      lastIndex = regex.lastIndex
+  if (typeof value === 'number') {
+    return <span style={{ color: '#60a5fa' }}>{String(value)}</span>
+  }
 
-      if (match[1]) {
-        // Property key (string followed by colon)
-        tokens.push(
-          <span key={tokens.length} style={{ color: '#93c5fd' }}>{match[1]}</span>,
-          ':'
-        )
-      } else if (match[2]) {
-        // String value
-        tokens.push(
-          <span key={tokens.length} style={{ color: '#86efac' }}>{match[2]}</span>
-        )
-      } else if (match[3]) {
-        // Number
-        tokens.push(
-          <span key={tokens.length} style={{ color: '#fde68a' }}>{match[3]}</span>
-        )
-      } else if (match[4]) {
-        // Boolean
-        tokens.push(
-          <span key={tokens.length} style={{ color: '#c4b5fd' }}>{match[4]}</span>
-        )
-      } else if (match[5]) {
-        // Null
-        tokens.push(
-          <span key={tokens.length} style={{ color: '#9ca3af' }}>{match[5]}</span>
-        )
-      } else if (match[6]) {
-        // Structural characters and whitespace
-        tokens.push(match[6])
-      }
+  if (typeof value === 'boolean') {
+    return <span style={{ color: '#fb923c' }}>{String(value)}</span>
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span style={{ color: '#9ca3af' }}>{'[]'}</span>
+
+    if (collapsed) {
+      return (
+        <span>
+          <button
+            onClick={() => setCollapsed(false)}
+            className="text-muted-foreground hover:text-foreground mr-1 font-mono text-xs"
+          >▶</button>
+          <span style={{ color: '#9ca3af' }}>{'['} {value.length} items {']'}</span>
+        </span>
+      )
     }
 
-    // Any remaining unmatched text
-    if (lastIndex < str.length) {
-      tokens.push(str.slice(lastIndex))
+    return (
+      <span>
+        <button
+          onClick={() => setCollapsed(true)}
+          className="text-muted-foreground hover:text-foreground mr-1 font-mono text-xs"
+        >▼</button>
+        <span>{'['}</span>
+        <span className="block">
+          {value.map((item, i) => (
+            <span key={i} className="block" style={{ paddingLeft: `${(depth + 1) * 16}px` }}>
+              <JsonNode value={item} depth={depth + 1} />
+              {i < value.length - 1 && <span style={{ color: '#9ca3af' }}>,</span>}
+            </span>
+          ))}
+        </span>
+        <span style={{ paddingLeft: `${depth * 16}px` }}>{']'}</span>
+      </span>
+    )
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return <span style={{ color: '#9ca3af' }}>{'{}'}</span>
+
+    if (collapsed) {
+      return (
+        <span>
+          <button
+            onClick={() => setCollapsed(false)}
+            className="text-muted-foreground hover:text-foreground mr-1 font-mono text-xs"
+          >▶</button>
+          <span style={{ color: '#9ca3af' }}>{'{'} {entries.length} keys {'}'}</span>
+        </span>
+      )
     }
 
-    return tokens
+    return (
+      <span>
+        <button
+          onClick={() => setCollapsed(true)}
+          className="text-muted-foreground hover:text-foreground mr-1 font-mono text-xs"
+        >▼</button>
+        <span>{'{'}</span>
+        <span className="block">
+          {entries.map(([key, val], i) => (
+            <span key={key} className="block" style={{ paddingLeft: `${(depth + 1) * 16}px` }}>
+              <span style={{ color: '#93c5fd' }}>&quot;{key}&quot;</span>
+              <span style={{ color: '#9ca3af' }}>: </span>
+              <JsonNode value={val} depth={depth + 1} />
+              {i < entries.length - 1 && <span style={{ color: '#9ca3af' }}>,</span>}
+            </span>
+          ))}
+        </span>
+        <span style={{ paddingLeft: `${depth * 16}px` }}>{'}'}</span>
+      </span>
+    )
+  }
+
+  // Fallback for unknown types
+  return <span style={{ color: '#9ca3af' }}>{String(value)}</span>
+}
+
+function JsonDisplay({ data }: { data: unknown }) {
+  if (data === null || data === undefined) {
+    return <div className="p-4 text-sm text-muted-foreground">null</div>
+  }
+
+  // If data is a string, try to parse it as JSON for structured viewing
+  let parsed: unknown = data
+  if (typeof data === 'string') {
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      // Not valid JSON — render as plain string
+      return (
+        <pre className="p-4 bg-background/80 text-sm font-mono overflow-x-auto whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto text-foreground">
+          {data}
+        </pre>
+      )
+    }
   }
 
   return (
     <pre className="p-4 bg-background/80 text-sm font-mono overflow-x-auto whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto">
-      {tokenize(jsonStr)}
+      <JsonNode value={parsed} depth={0} />
     </pre>
   )
 }

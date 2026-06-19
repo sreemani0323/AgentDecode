@@ -16,23 +16,32 @@ Output from LLM: ${JSON.stringify(output).slice(0, 500)}
 Respond with JSON only, no markdown:
 {"score": 7.5, "flagged": false, "reason": "Response is accurate and helpful"}`
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      signal: AbortSignal.timeout(15000),
-      headers: {
-        'Authorization': `Bearer ${groqApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: 'You are an LLM output quality evaluator. Always respond with valid JSON only.' },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.1,
-        max_tokens: 200,
-      }),
-    })
+    // 10s AbortController timeout
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
+    let response: Response
+    try {
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${groqApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: 'You are an LLM output quality evaluator. Always respond with valid JSON only.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.1,
+          max_tokens: 200,
+        }),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
 
     if (!response.ok) return
 
@@ -40,20 +49,28 @@ Respond with JSON only, no markdown:
     const content = data.choices?.[0]?.message?.content?.trim()
     if (!content) return
 
-    // Parse JSON - handle potential markdown wrapping
-    let parsed: any
+    // Robust JSON parsing with full fallback
+    let score: number
+    let reasoning: string
+    let flagged: boolean
+
     try {
       const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-      parsed = JSON.parse(cleaned)
+      const parsed = JSON.parse(cleaned)
+
+      score = typeof parsed.score === 'number' ? Math.min(10, Math.max(0, parsed.score)) : 5.0
+      reasoning = (
+        typeof parsed.reason === 'string' ? parsed.reason :
+        typeof parsed.reasoning === 'string' ? parsed.reasoning :
+        'No reasoning provided'
+      ).slice(0, 500)
+      flagged = typeof parsed.flagged === 'boolean' ? parsed.flagged : score < 6.0
     } catch {
-      return
+      // Fallback on parse error — neutral score, don't crash
+      score = 5.0
+      reasoning = 'Parse error'
+      flagged = false
     }
-
-    const score = typeof parsed.score === 'number' ? Math.min(10, Math.max(0, parsed.score)) : null
-    if (score === null) return
-
-    const flagged = score < 6.0
-    const reasoning = typeof parsed.reason === 'string' ? parsed.reason.slice(0, 500) : null
 
     const supabase = createServiceClient()
     await supabase.from('eval_scores').upsert({

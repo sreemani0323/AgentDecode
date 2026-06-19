@@ -10,7 +10,7 @@ from contextlib import contextmanager
 class SpanContext:
     def __init__(self, session, name: str, span_type: str):
         self.session = session
-        self.id = str(uuid.uuid4())
+        self.client_span_id = str(uuid.uuid4())
         self.name = name
         self.span_type = span_type
         self.status = "ok"
@@ -25,17 +25,17 @@ class SpanContext:
         self.output_tokens = None
         self.cost_usd = None
         self.metadata = {}
-        self.parent_span_id = None
+        self.parent_client_span_id = None
         
     def __enter__(self):
         self.started_at = datetime.datetime.utcnow().isoformat() + "Z"
         # Set parent span if there is an active span in the thread context
         if hasattr(self.session.tracer._thread_local, 'current_span_id'):
-            self.parent_span_id = self.session.tracer._thread_local.current_span_id
+            self.parent_client_span_id = self.session.tracer._thread_local.current_span_id
         
         # Make this span the current active span
         self._previous_span_id = getattr(self.session.tracer._thread_local, 'current_span_id', None)
-        self.session.tracer._thread_local.current_span_id = self.id
+        self.session.tracer._thread_local.current_span_id = self.client_span_id
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -54,8 +54,8 @@ class SpanContext:
         self.session.tracer._thread_local.current_span_id = self._previous_span_id
             
         span_data = {
-            "id": self.id,
-            "parent_span_id": self.parent_span_id,
+            "client_span_id": self.client_span_id,
+            "parent_client_span_id": self.parent_client_span_id,
             "name": self.name,
             "span_type": self.span_type,
             "status": self.status,

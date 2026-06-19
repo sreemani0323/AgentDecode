@@ -92,68 +92,36 @@ export async function POST(request: Request) {
   const body = validation.data
 
   try {
-    // 9. Find or create session
+    // 9. Find or create session (atomic upsert to prevent race conditions)
     let sessionId: string
 
+    const earliestStart = body.spans.reduce((earliest: string, span: any) => {
+      return span.started_at < earliest ? span.started_at : earliest
+    }, body.spans[0].started_at)
+
     if (body.session_id) {
-      // Try to find existing session with this external_id
-      const { data: existingSession } = await supabase
+      // Use upsert with onConflict to atomically create-or-find the session
+      const { data: session, error: sessionError } = await supabase
         .from('sessions')
-        .select('id')
-        .eq('external_id', body.session_id)
-        .eq('project_id', projectId)
-        .single()
-
-      if (existingSession) {
-        sessionId = existingSession.id
-      } else {
-        // Create new session with external_id (handle race condition)
-        const earliestStart = body.spans.reduce((earliest: string, span: any) => {
-          return span.started_at < earliest ? span.started_at : earliest
-        }, body.spans[0].started_at)
-
-        const { data: newSession, error: sessionError } = await supabase
-          .from('sessions')
-          .insert({
+        .upsert(
+          {
             project_id: projectId,
             external_id: body.session_id,
             name: body.session_name || 'Unnamed Session',
             status: 'running',
             started_at: earliestStart,
-          })
-          .select('id')
-          .maybeSingle()
+          },
+          { onConflict: 'project_id,external_id', ignoreDuplicates: false }
+        )
+        .select('id')
+        .single()
 
-        if (sessionError) {
-          // If it's a unique constraint violation (race condition), just fetch it
-          if (sessionError.code === '23505') {
-            const { data: retrySession } = await supabase
-              .from('sessions')
-              .select('id')
-              .eq('external_id', body.session_id)
-              .eq('project_id', projectId)
-              .single()
-              
-            if (retrySession) {
-              sessionId = retrySession.id
-            } else {
-              return NextResponse.json({ error: 'Failed to create or find session after race: ' + sessionError.message }, { status: 500 })
-            }
-          } else {
-            return NextResponse.json({ error: 'Failed to create session: ' + sessionError.message }, { status: 500 })
-          }
-        } else if (newSession) {
-          sessionId = newSession.id
-        } else {
-          return NextResponse.json({ error: 'Failed to create session: unknown error' }, { status: 500 })
-        }
+      if (sessionError || !session) {
+        return NextResponse.json({ error: 'Failed to create/find session: ' + (sessionError?.message || 'unknown') }, { status: 500 })
       }
+      sessionId = session.id
     } else {
-      // No external session_id — create a new session
-      const earliestStart = body.spans.reduce((earliest: string, span: any) => {
-        return span.started_at < earliest ? span.started_at : earliest
-      }, body.spans[0].started_at)
-
+      // No external session_id — always create a new session
       const { data: newSession, error: sessionError } = await supabase
         .from('sessions')
         .insert({
@@ -171,17 +139,37 @@ export async function POST(request: Request) {
       sessionId = newSession.id
     }
 
-    // 10. Insert all spans
-    const spansToInsert = body.spans.map((span: any) => {
+    // 10. Insert all spans with client_span_id → DB UUID mapping
+    // Sort: parent spans (no parent) first, then children
+    const sortedSpans = [...body.spans].sort((a: any, b: any) => {
+      const aIsRoot = !a.parent_span_id && !a.parent_client_span_id
+      const bIsRoot = !b.parent_span_id && !b.parent_client_span_id
+      if (aIsRoot && !bIsRoot) return -1
+      if (!aIsRoot && bIsRoot) return 1
+      return 0
+    })
+
+    // Track mapping from client_span_id → DB UUID
+    const clientToDbId = new Map<string, string>()
+    const spanIds: string[] = []
+    const spansToInsert: any[] = []
+
+    for (const span of sortedSpans) {
       let durationMs = span.duration_ms
       if (!durationMs && span.started_at && span.ended_at) {
         durationMs = new Date(span.ended_at).getTime() - new Date(span.started_at).getTime()
       }
 
-      return {
+      // Resolve parent_span_id: prefer direct DB UUID, then look up from client mapping
+      let resolvedParentId = span.parent_span_id || null
+      if (!resolvedParentId && span.parent_client_span_id) {
+        resolvedParentId = clientToDbId.get(span.parent_client_span_id) || null
+      }
+
+      const spanRow = {
         session_id: sessionId,
         project_id: projectId,
-        parent_span_id: span.parent_span_id || null,
+        parent_span_id: resolvedParentId,
         name: span.name,
         span_type: span.span_type || 'chain',
         status: span.status || 'ok',
@@ -197,18 +185,26 @@ export async function POST(request: Request) {
         cost_usd: span.cost_usd || null,
         metadata: span.metadata || {},
       }
-    })
 
-    const { data: insertedSpans, error: spansError } = await supabase
-      .from('spans')
-      .insert(spansToInsert)
-      .select('id')
+      const { data: inserted, error: insertErr } = await supabase
+        .from('spans')
+        .insert(spanRow)
+        .select('id')
+        .single()
 
-    if (spansError || !insertedSpans) {
-      return NextResponse.json({ error: 'Failed to insert spans: ' + (spansError?.message || 'unknown') }, { status: 500 })
+      if (insertErr || !inserted) {
+        return NextResponse.json({ error: 'Failed to insert span: ' + (insertErr?.message || 'unknown') }, { status: 500 })
+      }
+
+      const dbId = inserted.id
+      spanIds.push(dbId)
+      spansToInsert.push(spanRow)
+
+      // Record mapping for children to reference
+      if (span.client_span_id) {
+        clientToDbId.set(span.client_span_id, dbId)
+      }
     }
-
-    const spanIds = insertedSpans.map((s: any) => s.id)
 
     // Fire-and-forget: Score LLM spans with Groq
     for (let i = 0; i < spansToInsert.length; i++) {

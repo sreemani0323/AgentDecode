@@ -14,12 +14,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Prefer orgs where user is owner, then fall back to any membership
   const { data: orgMember } = await supabase
     .from('org_members')
     .select('org_id')
     .eq('user_id', user.id)
+    .order('role', { ascending: true })
     .limit(1)
-    .single()
+    .maybeSingle()
 
   if (!orgMember) {
     return NextResponse.json({ error: 'No organization found' }, { status: 404 })
@@ -73,12 +75,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Name must be between 3 and 50 characters' }, { status: 400 })
     }
 
+    // Prefer orgs where user is owner, then fall back to any membership
     const { data: orgMember } = await supabase
       .from('org_members')
       .select('org_id')
       .eq('user_id', user.id)
+      .order('role', { ascending: true })
       .limit(1)
-      .single()
+      .maybeSingle()
 
     if (!orgMember) {
       return NextResponse.json({ error: 'No organization found' }, { status: 404 })

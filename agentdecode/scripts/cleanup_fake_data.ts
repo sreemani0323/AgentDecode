@@ -1,19 +1,27 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceClient } from '../lib/supabase/server'
 import fs from 'fs'
+import path from 'path'
 
 // Load .env.local
-const envContent = fs.readFileSync('.env.local', 'utf-8')
-for (const line of envContent.split('\n')) {
-  const [key, ...vals] = line.split('=')
-  if (key && vals.length > 0) {
-    process.env[key.trim()] = vals.join('=').trim()
+const envPath = path.resolve(process.cwd(), '.env.local')
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf-8')
+  for (const line of envContent.split('\n')) {
+    const [key, ...vals] = line.split('=')
+    if (key && vals.length > 0) {
+      process.env[key.trim()] = vals.join('=').trim()
+    }
   }
 }
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Initialize client using project's createServiceClient utility
+let supabase: ReturnType<typeof createServiceClient>
+try {
+  supabase = createServiceClient()
+} catch (err: any) {
+  console.error('Failed to initialize Supabase client:', err.message)
+  process.exit(1)
+}
 
 async function cleanup() {
   console.log('Looking for project named "fakeproject"...')
@@ -24,7 +32,15 @@ async function cleanup() {
     .eq('name', 'fakeproject')
 
   if (findErr) {
-    console.error('Error finding project:', findErr.message)
+    if (findErr.message.includes('fetch failed')) {
+      console.error('\nError: Failed to connect to Supabase (fetch failed).')
+      console.error('This usually occurs when your Supabase project is paused or deleted,')
+      console.error('or if you have network connectivity issues (e.g. DNS resolution failed for the project URL).\n')
+      console.error('Project URL in use:', process.env.NEXT_PUBLIC_SUPABASE_URL)
+      console.error('Please verify that your Supabase project is active/resumed in your Supabase dashboard.\n')
+    } else {
+      console.error('Error finding project:', findErr.message)
+    }
     return
   }
 

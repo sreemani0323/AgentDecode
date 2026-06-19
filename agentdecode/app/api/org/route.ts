@@ -23,8 +23,9 @@ export async function GET(request: NextRequest) {
       .from('org_members')
       .select('*, organizations(*)')
       .eq('user_id', user.id)
+      .order('role', { ascending: true })
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (memberError || !membership) {
       return NextResponse.json(
@@ -75,7 +76,7 @@ export async function PATCH(request: NextRequest) {
       .eq('user_id', user.id)
       .eq('role', 'owner')
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (memberError || !membership) {
       return NextResponse.json(

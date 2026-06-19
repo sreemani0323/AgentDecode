@@ -2,10 +2,6 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { sendAlertEmail } from '@/lib/resend'
 import { logger } from '@/lib/logger'
 
-// In-memory cooldown tracker to prevent alert spam.
-// Resets on cold start, which is acceptable — better to re-fire once than spam continuously.
-const alertCooldowns = new Map<string, number>()
-
 export async function checkAndFireAlerts(projectId: string): Promise<void> {
   try {
     const supabase = createServiceClient()
@@ -32,83 +28,98 @@ export async function checkAndFireAlerts(projectId: string): Promise<void> {
       const windowStart = new Date(Date.now() - rule.window_minutes * 60 * 1000).toISOString()
 
       try {
+        // Cooldown check: skip if last_fired_at is within the window
+        if (rule.last_fired_at) {
+          const lastFired = new Date(rule.last_fired_at).getTime()
+          const cooldownMs = rule.window_minutes * 60 * 1000
+          if (Date.now() - lastFired < cooldownMs) continue
+        }
+
+        let shouldFire = false
+        let alertBody = ''
+
         if (rule.metric === 'error_rate') {
-          // Count total sessions and error sessions in window
-          const { data: sessions } = await supabase
+          // Use head:true + count to get counts without fetching rows
+          const { count: totalCount } = await supabase
             .from('sessions')
-            .select('id, status')
+            .select('*', { count: 'exact', head: true })
             .eq('project_id', projectId)
             .gte('started_at', windowStart)
 
-          if (!sessions || sessions.length === 0) continue
+          if (!totalCount || totalCount === 0) continue
 
-          const errorCount = sessions.filter((s: any) => s.status === 'error').length
-          const errorRate = (errorCount / sessions.length) * 100
+          const { count: errorCount } = await supabase
+            .from('sessions')
+            .select('*', { count: 'exact', head: true })
+            .eq('project_id', projectId)
+            .eq('status', 'error')
+            .gte('started_at', windowStart)
+
+          const errorRate = ((errorCount || 0) / totalCount) * 100
 
           if (errorRate > rule.threshold) {
-            const cooldownMs = rule.window_minutes * 60 * 1000
-            const lastFired = alertCooldowns.get(rule.id) || 0
-            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
-
-            await sendAlertEmail(
-              rule.notify_email,
-              `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
-              `Alert: ${rule.name}\n\nMetric: Error Rate\nCurrent Value: ${errorRate.toFixed(1)}%\nThreshold: ${rule.threshold}%\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
-            )
-            alertCooldowns.set(rule.id, Date.now())
+            shouldFire = true
+            alertBody = `Alert: ${rule.name}\n\nMetric: Error Rate\nCurrent Value: ${errorRate.toFixed(1)}%\nThreshold: ${rule.threshold}%\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
           }
         } else if (rule.metric === 'latency_p95') {
-          // Get span durations in window
-          const { data: spans } = await supabase
+          // Get total count of spans with duration in window
+          const { count: totalCount } = await supabase
+            .from('spans')
+            .select('*', { count: 'exact', head: true })
+            .eq('project_id', projectId)
+            .gte('started_at', windowStart)
+            .not('duration_ms', 'is', null)
+
+          if (!totalCount || totalCount === 0) continue
+
+          // Fetch exactly the P95 row
+          const p95Offset = Math.floor(totalCount * 0.95)
+          const { data: p95Row } = await supabase
             .from('spans')
             .select('duration_ms')
             .eq('project_id', projectId)
             .gte('started_at', windowStart)
             .not('duration_ms', 'is', null)
             .order('duration_ms', { ascending: true })
+            .range(p95Offset, p95Offset)
 
-          if (!spans || spans.length === 0) continue
-
-          const p95Index = Math.floor(spans.length * 0.95)
-          const p95 = spans[p95Index]?.duration_ms || 0
+          const p95 = p95Row?.[0]?.duration_ms || 0
 
           if (p95 > rule.threshold) {
-            const cooldownMs = rule.window_minutes * 60 * 1000
-            const lastFired = alertCooldowns.get(rule.id) || 0
-            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
-
-            await sendAlertEmail(
-              rule.notify_email,
-              `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
-              `Alert: ${rule.name}\n\nMetric: P95 Latency\nCurrent Value: ${p95}ms\nThreshold: ${rule.threshold}ms\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
-            )
-            alertCooldowns.set(rule.id, Date.now())
+            shouldFire = true
+            alertBody = `Alert: ${rule.name}\n\nMetric: P95 Latency\nCurrent Value: ${p95}ms\nThreshold: ${rule.threshold}ms\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
           }
         } else if (rule.metric === 'cost_spike') {
-          // Sum cost in window
-          const { data: spans } = await supabase
+          // Select only cost_usd column and sum client-side
+          const { data: costs } = await supabase
             .from('spans')
             .select('cost_usd')
             .eq('project_id', projectId)
             .gte('started_at', windowStart)
             .not('cost_usd', 'is', null)
 
-          if (!spans || spans.length === 0) continue
+          if (!costs || costs.length === 0) continue
 
-          const totalCost = spans.reduce((sum: number, s: any) => sum + (s.cost_usd || 0), 0)
+          const totalCost = costs.reduce((sum: number, s: any) => sum + (s.cost_usd || 0), 0)
 
           if (totalCost > rule.threshold) {
-            const cooldownMs = rule.window_minutes * 60 * 1000
-            const lastFired = alertCooldowns.get(rule.id) || 0
-            if (Date.now() - lastFired < cooldownMs) continue // still in cooldown
-
-            await sendAlertEmail(
-              rule.notify_email,
-              `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
-              `Alert: ${rule.name}\n\nMetric: Cost Spike\nCurrent Value: $${totalCost.toFixed(4)}\nThreshold: $${rule.threshold}\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
-            )
-            alertCooldowns.set(rule.id, Date.now())
+            shouldFire = true
+            alertBody = `Alert: ${rule.name}\n\nMetric: Cost Spike\nCurrent Value: $${totalCost.toFixed(4)}\nThreshold: $${rule.threshold}\nWindow: ${rule.window_minutes} minutes\nProject: ${project.name}\n\nView dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects/${projectId}`
           }
+        }
+
+        if (shouldFire) {
+          await sendAlertEmail(
+            rule.notify_email,
+            `AgentDecode Alert: ${rule.name} triggered for ${project.name}`,
+            alertBody
+          )
+
+          // Persist last_fired_at to DB for durable cooldown across cold starts
+          await supabase
+            .from('alert_rules')
+            .update({ last_fired_at: new Date().toISOString() })
+            .eq('id', rule.id)
         }
       } catch (ruleErr) {
         logger.error(`Alert rule ${rule.id} check failed`, ruleErr as Error)
