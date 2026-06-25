@@ -111,7 +111,7 @@ export default function ErrorRateChart({ data }: ErrorRateChartProps) {
           />
           <Tooltip content={<CustomTooltip />} />
           <Area
-            type="monotone"
+            type="linear"
             dataKey="errorRate"
             stroke="#ef4444"
             strokeWidth={2}
