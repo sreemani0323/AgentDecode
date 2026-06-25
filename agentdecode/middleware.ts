@@ -24,7 +24,7 @@ export async function middleware(request: NextRequest) {
     }
 
     // Skip auth for public API endpoints
-    if (pathname === '/api/ingest' || pathname === '/api/health' || pathname === '/api/docs') {
+    if (pathname === '/api/ingest' || pathname === '/api/health' || pathname === '/api/docs' || pathname === '/api/features') {
       return withSecurityHeaders(NextResponse.next())
     }
 
