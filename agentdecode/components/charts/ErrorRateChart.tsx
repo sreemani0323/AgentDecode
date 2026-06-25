@@ -1,6 +1,7 @@
 "use client"
 
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts'
 import { format, parseISO } from 'date-fns'
 
 interface ErrorRateDataPoint {
@@ -30,6 +31,37 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export default function ErrorRateChart({ data }: ErrorRateChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [chartWidth, setChartWidth] = useState(0)
+
+  const updateWidth = useCallback(() => {
+    if (containerRef.current) {
+      setChartWidth(containerRef.current.clientWidth)
+    }
+  }, [])
+
+  useEffect(() => {
+    updateWidth()
+    const el = containerRef.current
+    if (!el) return
+
+    const observer = new ResizeObserver(() => {
+      updateWidth()
+    })
+    observer.observe(el)
+
+    // Also listen to window resize as fallback
+    window.addEventListener('resize', updateWidth)
+    // Delayed measurement to handle hydration timing
+    const timer = setTimeout(updateWidth, 100)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateWidth)
+      clearTimeout(timer)
+    }
+  }, [updateWidth])
+
   const allZero = data.every((d) => d.totalSessions === 0)
 
   if (allZero) {
@@ -46,40 +78,49 @@ export default function ErrorRateChart({ data }: ErrorRateChartProps) {
     fullDate: format(parseISO(d.date), 'MMM d'),
   }))
 
+  const CHART_HEIGHT = 200
+
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-        <defs>
-          <linearGradient id="errorGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ef4444" stopOpacity={0.2} />
-            <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-        <XAxis
-          dataKey="label"
-          axisLine={false}
-          tickLine={false}
-          tick={{ fill: '#6b7280', fontSize: 12 }}
-        />
-        <YAxis
-          axisLine={false}
-          tickLine={false}
-          tick={{ fill: '#6b7280', fontSize: 12 }}
-          domain={[0, 100]}
-          tickFormatter={(value: number) => `${value}%`}
-        />
-        <Tooltip content={<CustomTooltip />} />
-        <Area
-          type="monotone"
-          dataKey="errorRate"
-          stroke="#ef4444"
-          strokeWidth={2}
-          fill="url(#errorGradient)"
-          dot={{ r: 4, fill: '#ef4444', strokeWidth: 0 }}
-          activeDot={{ r: 6, fill: '#ef4444', strokeWidth: 2, stroke: '#1f2937' }}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
+    <div ref={containerRef} style={{ width: '100%', height: CHART_HEIGHT }}>
+      {chartWidth > 0 && (
+        <AreaChart
+          data={chartData}
+          width={chartWidth}
+          height={CHART_HEIGHT}
+          margin={{ top: 5, right: 10, left: -20, bottom: 0 }}
+        >
+          <defs>
+            <linearGradient id="errorGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ef4444" stopOpacity={0.2} />
+              <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+          <XAxis
+            dataKey="label"
+            axisLine={false}
+            tickLine={false}
+            tick={{ fill: '#6b7280', fontSize: 12 }}
+          />
+          <YAxis
+            axisLine={false}
+            tickLine={false}
+            tick={{ fill: '#6b7280', fontSize: 12 }}
+            domain={[0, 100]}
+            tickFormatter={(value: number) => `${value}%`}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          <Area
+            type="monotone"
+            dataKey="errorRate"
+            stroke="#ef4444"
+            strokeWidth={2}
+            fill="url(#errorGradient)"
+            dot={{ r: 4, fill: '#ef4444', strokeWidth: 0 }}
+            activeDot={{ r: 6, fill: '#ef4444', strokeWidth: 2, stroke: '#1f2937' }}
+          />
+        </AreaChart>
+      )}
+    </div>
   )
 }
