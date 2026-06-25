@@ -245,7 +245,9 @@ export default async function ProjectPage({
       {/* 7-Day Error Rate Chart */}
       <div className="rounded-xl border border-border bg-card p-6 space-y-4">
         <h2 className="text-lg font-semibold text-foreground">7-Day Error Rate</h2>
-        <ErrorRateChart data={chartData} />
+        <div style={{ width: '100%', height: 200 }}>
+          <ErrorRateChart data={chartData} />
+        </div>
       </div>
 
       {/* Sessions Table */}

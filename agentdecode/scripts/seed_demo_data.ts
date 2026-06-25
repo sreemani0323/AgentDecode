@@ -77,7 +77,33 @@ async function seed() {
   if (existingProjects && existingProjects.length > 0) {
     console.log('Cleaning up existing "Customer Support Agent" project data...')
     for (const proj of existingProjects) {
-      await supabase.from('projects').delete().eq('id', proj.id)
+      // Delete in dependency order (spans FK to projects lacks ON DELETE CASCADE)
+      const { data: spanIds } = await supabase
+        .from('spans')
+        .select('id')
+        .eq('project_id', proj.id)
+      const sIds = (spanIds || []).map(s => s.id)
+
+      if (sIds.length > 0) {
+        // Delete issue_spans, eval_scores, ai_explanations that reference these spans
+        for (let i = 0; i < sIds.length; i += 500) {
+          const batch = sIds.slice(i, i + 500)
+          await supabase.from('issue_spans').delete().in('span_id', batch)
+          await supabase.from('eval_scores').delete().in('span_id', batch)
+          await supabase.from('ai_explanations').delete().in('span_id', batch)
+        }
+        // Delete spans
+        await supabase.from('spans').delete().eq('project_id', proj.id)
+      }
+      // Delete sessions (has ON DELETE CASCADE from project, but explicit is safer)
+      await supabase.from('sessions').delete().eq('project_id', proj.id)
+      // Delete issues
+      await supabase.from('issues').delete().eq('project_id', proj.id)
+      // Delete project
+      const { error: delErr } = await supabase.from('projects').delete().eq('id', proj.id)
+      if (delErr) {
+        console.error(`  Failed to delete project ${proj.id}: ${delErr.message}`)
+      }
     }
   }
 
