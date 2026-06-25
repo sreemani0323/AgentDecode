@@ -34,7 +34,6 @@ interface SpanNodeData {
 
 function SpanNode({ data }: { data: SpanNodeData }) {
   const isError = data.status === 'error'
-  const isLlm = data.spanType === 'llm'
 
   // Type badge colors
   const typeColors: Record<string, { bg: string; text: string; border: string }> = {

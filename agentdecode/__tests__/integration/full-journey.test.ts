@@ -52,7 +52,7 @@ let spanInsertCounter = 0
 // ── Supabase mock query builder ─────────────────────────────────
 
 function createMockQueryBuilder(tableName: string) {
-  let filterChain: Array<{ method: string; args: any[] }> = []
+  const filterChain: Array<{ method: string; args: any[] }> = []
   let insertData: any = null
   let updateData: any = null
   let upsertData: any = null

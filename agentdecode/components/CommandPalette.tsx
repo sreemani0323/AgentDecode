@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Search, ArrowRight, Activity, AlertCircle, Cpu, X, Command } from 'lucide-react'
+import { Search, ArrowRight, Activity, AlertCircle, Cpu, Command } from 'lucide-react'
 
 interface SearchResult {
   type: 'session' | 'span' | 'issue'

@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ArrowLeft, Plus, Trash2, Bell, BellOff } from 'lucide-react'
 import Link from 'next/link'
-import { formatDistanceToNow } from 'date-fns'
 
 interface AlertRule {
   id: string

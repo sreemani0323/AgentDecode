@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback } from 'react'
-import { formatDuration, formatCost, formatTokens, getStatusBgColor, getSpanTypeColor, cn } from '@/lib/utils'
+import { useState, useEffect } from 'react'
+import { formatDuration, formatCost, formatTokens, getSpanTypeColor, cn } from '@/lib/utils'
 import StatusBadge from '@/components/sessions/StatusBadge'
 import AIExplanationCard from '@/components/trace/AIExplanationCard'
 import { ChevronDown, ChevronRight, Loader2, Sparkles, Zap } from 'lucide-react'

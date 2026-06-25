@@ -44,7 +44,7 @@ export async function GET(request: Request) {
     const error_count = p.sessions?.reduce((acc: number, s: any) => acc + (s.error_count || 0), 0) || 0
     
     // Remove the raw sessions array from output
-    const { sessions, ...rest } = p
+    const { sessions: _sessions, ...rest } = p
     return {
       ...rest,
       session_count,

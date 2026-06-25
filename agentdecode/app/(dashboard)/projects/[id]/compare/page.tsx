@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, GitCompareArrows, ArrowUpDown, Clock, Cpu, DollarSign, Sparkles, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, GitCompareArrows, ArrowUpDown } from 'lucide-react'
 import type { Session, Span, EvalScore } from '@/types'
 
 interface SessionWithSpans extends Session {

@@ -1,4 +1,4 @@
-import { BookOpen, Terminal, Zap, Code2, Box, ChevronRight } from "lucide-react"
+import { BookOpen, Terminal, Zap, Code2, Box } from "lucide-react"
 import Link from "next/link"
 
 export default function DocsPage() {
