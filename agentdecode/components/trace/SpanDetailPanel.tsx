@@ -189,16 +189,50 @@ export default function SpanDetailPanel({
   const showExplainButton = !explanation && (isError || isFlagged)
   const [polling, setPolling] = useState(false)
   const [showPlayground, setShowPlayground] = useState(false)
+  const [evalScoringEnabled, setEvalScoringEnabled] = useState<boolean | null>(null)
+  const [explanationsEnabled, setExplanationsEnabled] = useState<boolean | null>(null)
+  const [pollingTimedOut, setPollingTimedOut] = useState(false)
+
+  // Fetch feature flags on mount
+  useEffect(() => {
+    fetch('/api/features')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setEvalScoringEnabled(data.evalScoringEnabled)
+          setExplanationsEnabled(data.explanationsEnabled)
+        }
+      })
+      .catch(() => {
+        // If /api/features fails, assume features are enabled
+        setEvalScoringEnabled(true)
+        setExplanationsEnabled(true)
+      })
+  }, [])
 
   // Auto-poll for eval score on LLM spans that don't have one yet
   useEffect(() => {
-    if (!isLlm || evalScore) {
+    if (!isLlm || evalScore || evalScoringEnabled === false) {
       setPolling(false)
       return
     }
 
+    // Don't poll until we know feature status
+    if (evalScoringEnabled === null) return
+
     setPolling(true)
+    const startTime = Date.now()
+    const TIMEOUT_MS = 30000 // Stop polling after 30 seconds
+
     const interval = setInterval(async () => {
+      // Timeout — stop polling
+      if (Date.now() - startTime > TIMEOUT_MS) {
+        setPolling(false)
+        setPollingTimedOut(true)
+        clearInterval(interval)
+        return
+      }
+
       try {
         const res = await fetch(`/api/spans/${span.id}/eval`)
         if (res.ok) {
@@ -215,7 +249,7 @@ export default function SpanDetailPanel({
     }, 3000)
 
     return () => clearInterval(interval)
-  }, [span.id, isLlm, evalScore, onEvalScoreUpdate])
+  }, [span.id, isLlm, evalScore, onEvalScoreUpdate, evalScoringEnabled])
 
   return (
     <div className="space-y-6">
@@ -288,11 +322,28 @@ export default function SpanDetailPanel({
         </div>
       )}
 
-      {/* Eval score polling spinner for LLM spans without score */}
+      {/* Eval score status for LLM spans without score */}
+      {isLlm && !evalScore && evalScoringEnabled === false && (
+        <div className="p-4 rounded-lg border border-border bg-card">
+          <span className="text-sm text-muted-foreground">
+            Quality scoring is disabled. Add a free <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded font-mono">GROQ_API_KEY</code> to enable this — get one at{' '}
+            <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:text-primary/80">console.groq.com</a>
+          </span>
+        </div>
+      )}
+
       {isLlm && !evalScore && polling && (
         <div className="p-4 rounded-lg border border-border bg-card flex items-center gap-3">
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
           <span className="text-sm text-muted-foreground">Scoring in progress...</span>
+        </div>
+      )}
+
+      {isLlm && !evalScore && pollingTimedOut && !polling && (
+        <div className="p-4 rounded-lg border border-border bg-card">
+          <span className="text-sm text-muted-foreground">
+            Eval score not available for this span. This may happen with seeded data or if scoring failed.
+          </span>
         </div>
       )}
 
@@ -312,7 +363,16 @@ export default function SpanDetailPanel({
         />
       )}
 
-      {showExplainButton && (
+      {showExplainButton && explanationsEnabled === false && (
+        <div className="p-4 rounded-lg border border-border bg-card">
+          <span className="text-sm text-muted-foreground">
+            AI explanations are disabled. Add a free <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded font-mono">GEMINI_API_KEY</code> to enable this — get one at{' '}
+            <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:text-primary/80">aistudio.google.com</a>
+          </span>
+        </div>
+      )}
+
+      {showExplainButton && explanationsEnabled !== false && (
         <Button
           variant="outline"
           onClick={onRequestExplanation}

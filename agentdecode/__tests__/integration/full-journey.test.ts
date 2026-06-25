@@ -378,8 +378,8 @@ describe('Full Journey Integration Tests', () => {
     expect(mockDbState.issue_spans.length).toBe(2)
   })
 
-  // ── Test 5: Explain with Gemini crash doesn't return 500 ───────
-  test('Test 5: Explain endpoint — Gemini crash is unhandled (documents the bug)', async () => {
+  // ── Test 5a: Explain with Gemini crash → 200 fallback ───────────
+  test('Test 5a: Explain endpoint returns 200 fallback when Gemini throws', async () => {
     // Add span to mock DB
     mockDbState.spans.push({
       id: 'span-bad',
@@ -398,7 +398,6 @@ describe('Full Journey Integration Tests', () => {
       explainSpanFailure: () => Promise.reject(new Error('Gemini parse failure')),
     }))
 
-    // Also need process.env.GEMINI_API_KEY to be set
     process.env.GEMINI_API_KEY = 'test-key'
 
     const { POST } = await import('@/app/api/spans/[id]/explain/route')
@@ -407,23 +406,49 @@ describe('Full Journey Integration Tests', () => {
       method: 'POST',
     })
 
-    let crashed = false
-    try {
-      const response = await POST(request, { params: Promise.resolve({ id: 'span-bad' }) })
-      // If the route has no try/catch around explainSpanFailure, the error propagates as a 500
-      // This test DOCUMENTS whether the bug exists
-      if (response.status === 500) {
-        crashed = true
-      }
-    } catch {
-      crashed = true
-    }
+    const response = await POST(request, { params: Promise.resolve({ id: 'span-bad' }) })
 
-    // Record the result — if crashed is true, there's an unhandled error bug
-    // For now, we just document it
-    expect(typeof crashed).toBe('boolean')
+    // Must be 200, NOT 500
+    expect(response.status).toBe(200)
+
+    const json = await response.json()
+    expect(json.fallback).toBe(true)
+    expect(json.diagnosis).toContain('Unable to analyze')
+    expect(json.suggested_fix).toBeTruthy()
 
     delete process.env.GEMINI_API_KEY
+  })
+
+  // ── Test 5b: Explain without GEMINI_API_KEY → 200 fallback ─────
+  test('Test 5b: Explain endpoint returns 200 fallback when GEMINI_API_KEY missing', async () => {
+    mockDbState.spans.push({
+      id: 'span-nokey',
+      session_id: 'sess-1',
+      project_id: 'proj-a',
+      name: 'test_span',
+      span_type: 'llm',
+      status: 'error',
+      input: 'test',
+      output: null,
+      started_at: '2026-06-25T10:00:00Z',
+    })
+
+    delete process.env.GEMINI_API_KEY
+
+    const { POST } = await import('@/app/api/spans/[id]/explain/route')
+
+    const request = new Request('http://localhost:3000/api/spans/span-nokey/explain', {
+      method: 'POST',
+    })
+
+    const response = await POST(request, { params: Promise.resolve({ id: 'span-nokey' }) })
+
+    expect(response.status).toBe(200)
+
+    const json = await response.json()
+    expect(json.fallback).toBe(true)
+    expect(json.diagnosis).toContain('GEMINI_API_KEY')
+    expect(json.diagnosis).toContain('aistudio.google.com')
   })
 
   // ── Test 6: Groq failure doesn't crash ingest ─────────────────
@@ -593,11 +618,27 @@ describe('Full Journey Integration Tests', () => {
 
   // ── Test 14: Rate limit → 429 ─────────────────────────────────
   test('Test 14: Rate limiting returns 429 with Retry-After', async () => {
+    // Must reset modules to override the rate-limit mock from beforeEach
+    vi.resetModules()
+
+    vi.doMock('@/lib/logger', () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock('@/lib/env', () => ({
+      checkEnv: () => ({ ok: true, missing: [], warnings: [] }),
+    }))
     vi.doMock('@/lib/rate-limit', () => ({
       ingestRateLimiter: {
         check: () => ({ allowed: false, remaining: 0, retryAfterMs: 2000 }),
       },
       getClientIdentifier: () => 'test-client',
+    }))
+    vi.doMock('@/lib/groq', () => ({ scoreSpanWithGroq: vi.fn() }))
+    vi.doMock('@/lib/alerts', () => ({ checkAndFireAlerts: vi.fn() }))
+    vi.doMock('@/lib/supabase/server', () => ({
+      createServiceClient: () => ({
+        from: (table: string) => createMockQueryBuilder(table),
+      }),
     }))
 
     const { POST } = await import('@/app/api/ingest/route')
