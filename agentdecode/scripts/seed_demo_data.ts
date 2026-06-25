@@ -120,11 +120,11 @@ async function seed() {
     new Date(now.getTime() - 0.5 * 24 * 3600 * 1000), // Error Session 3 (Index 14)
   ]
 
-  const sessionsToInsert = []
-  const spansToInsert = []
-  const evalsToInsert = []
-  const explanationsToInsert = []
-  const issueSpansToInsert = []
+  const sessionsToInsert: Record<string, unknown>[] = []
+  const spansToInsert: Record<string, unknown>[] = []
+  const evalsToInsert: Record<string, unknown>[] = []
+  const explanationsToInsert: Record<string, unknown>[] = []
+  const issueSpansToInsert: Record<string, unknown>[] = []
 
   // Pre-generate issue IDs
   const kbTimeoutIssueId = crypto.randomUUID()
