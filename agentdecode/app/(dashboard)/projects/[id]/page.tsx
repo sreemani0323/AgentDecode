@@ -139,8 +139,10 @@ export default async function ProjectPage({
   const chartData = Array.from({ length: 7 }, (_, i) => {
     const date = subDays(new Date(), 6 - i)
     const dateStr = format(date, 'yyyy-MM-dd')
-    const dayStart = new Date(dateStr + 'T00:00:00Z')
-    const dayEnd = new Date(dateStr + 'T23:59:59Z')
+    const dayStart = new Date(date)
+    dayStart.setHours(0, 0, 0, 0)
+    const dayEnd = new Date(date)
+    dayEnd.setHours(23, 59, 59, 999)
 
     const daySessions = allSessions?.filter((s) => {
       const t = new Date(s.started_at)

@@ -203,25 +203,32 @@ async function seed() {
       childSpans.push(span)
       currentOffsetMs += duration
 
-      // Generate eval_scores for LLM spans
-      if (type === 'llm' && spanStatus === 'ok') {
-        const r = Math.random()
+      // Generate eval_scores for ALL LLM spans (ok and error)
+      if (type === 'llm') {
         let score = 0
         let reasoning = ''
         let flagged = false
 
-        if (r < 0.70) {
-          score = parseFloat((7.0 + Math.random() * 3.0).toFixed(1))
-          reasoning = 'The response directly answered the customer query with accurate details.'
-          flagged = false
-        } else if (r < 0.90) {
-          score = parseFloat((5.0 + Math.random() * 2.0).toFixed(1))
-          reasoning = 'The response was clear, but missed referencing refund rules.'
-          flagged = false
-        } else {
-          score = parseFloat((Math.random() * 5.0).toFixed(1))
-          reasoning = 'Response contains formatting issues or incomplete resolution.'
+        if (spanStatus === 'error') {
+          // Error spans get low scores
+          score = parseFloat((1.0 + Math.random() * 3.0).toFixed(1))
+          reasoning = 'Request failed before model could generate output.'
           flagged = true
+        } else {
+          const r = Math.random()
+          if (r < 0.70) {
+            score = parseFloat((7.0 + Math.random() * 3.0).toFixed(1))
+            reasoning = 'The response directly answered the customer query with accurate details.'
+            flagged = false
+          } else if (r < 0.90) {
+            score = parseFloat((5.0 + Math.random() * 2.0).toFixed(1))
+            reasoning = 'The response was clear, but missed referencing refund rules.'
+            flagged = false
+          } else {
+            score = parseFloat((Math.random() * 5.0).toFixed(1))
+            reasoning = 'Response contains formatting issues or incomplete resolution.'
+            flagged = true
+          }
         }
 
         evalsToInsert.push({
