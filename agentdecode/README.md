@@ -107,72 +107,38 @@ agentdecode/
 │   ├── gemini.ts        # Gemini error diagnosis
 │   ├── rate-limit.ts    # Token bucket rate limiter
 │   └── alerts.ts        # Alert rule evaluation
-├── packages/sdk/        # @agentdecode/sdk (TypeScript)
+├── __tests__/           # Integration & unit tests
 ├── supabase/
 │   └── migrations/      # Database schema (SQL)
 └── types/               # Shared TypeScript interfaces
 ```
 
-## TypeScript SDK Usage
+## Integration
 
-The easiest way to integrate AgentDecode in Node.js/TypeScript environments is using the official SDK.
-
-```bash
-npm install @agentdecode/sdk
-```
-
-```typescript
-import { AgentDecode } from '@agentdecode/sdk'
-
-const lens = new AgentDecode({
-  apiKey: 'al_sk_your_api_key',
-  projectId: 'your-project-id',
-  endpoint: 'https://your-app.vercel.app/api/ingest', // Optional: Use for self-hosting
-})
-
-const sessionId = `session_${Date.now()}`;
-
-// Wrap any function to trace it automatically
-const classify = lens.trace(
-  'classify_intent',
-  { type: 'llm' },
-  async (message: string) => {
-    // ... your logic ...
-    return "support";
-  }
-)
-
-await classify(sessionId, 'I need help with my order')
-```
-
-See the [SDK documentation](packages/sdk/README.md) for full details.
-
----
-
-## Direct HTTP Integration
-
-Send traces from any language using a simple POST request to the `/api/ingest` endpoint.
+AgentDecode uses a simple HTTP API — **no SDK installation required**. Send traces from any language using a POST request.
 
 ```javascript
 const response = await fetch('https://your-app.vercel.app/api/ingest', {
   method: 'POST',
   headers: {
-    'Authorization': 'Bearer al_sk_your_api_key',
+    'Authorization': 'Bearer al_your_api_key',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
-    projectId: 'your-project-id',
-    sessionId: `session_${Date.now()}`,
+    session_name: 'My Agent Session',
     spans: [
       {
         name: 'classify_intent',
-        type: 'llm',
-        status: 'success',
+        span_type: 'llm',
+        status: 'ok',
+        model: 'gpt-4o',
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
         duration_ms: 450,
         input: { message: 'I need help with my order' },
         output: { intent: 'support', confidence: 0.95 },
-        tokens_prompt: 45,
-        tokens_completion: 12,
+        input_tokens: 45,
+        output_tokens: 12,
         cost_usd: 0.0001
       }
     ]
@@ -180,7 +146,7 @@ const response = await fetch('https://your-app.vercel.app/api/ingest', {
 });
 ```
 
-Check the `app/(dashboard)/projects/[id]/page.tsx` or `app/(dashboard)/projects/[id]/settings/page.tsx` for dynamic snippets tailored to your project.
+See the in-app **Documentation** page for Python examples, parent-child span linking, error tracking, and the full API reference.
 
 ---
 
@@ -224,8 +190,7 @@ npm run lint
 
 ```mermaid
 graph TB
-    SDK["@agentdecode/sdk<br/>TypeScript SDK"] -->|POST /api/ingest| Ingest["Ingest API<br/>(rate limited, Zod validated)"]
-    HTTP["HTTP Client<br/>(any language)"] -->|POST /api/ingest| Ingest
+    HTTP["HTTP Client<br/>(any language)"] -->|POST /api/ingest| Ingest["Ingest API<br/>(rate limited, Zod validated)"]
 
     Ingest --> Supabase["Supabase<br/>(Postgres + RLS)"]
     Ingest -->|fire & forget| Groq["Groq<br/>(LLM eval scoring)"]
