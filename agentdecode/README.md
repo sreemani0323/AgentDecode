@@ -115,7 +115,46 @@ agentdecode/
 
 ## Integration
 
-AgentDecode uses a simple HTTP API — **no SDK installation required**. Send traces from any language using a POST request.
+### Python SDK
+
+The fastest way to get started — zero dependencies, uses only Python stdlib.
+
+```bash
+pip install agentdecode
+```
+
+```python
+from agentdecode import AgentDecode
+
+agent = AgentDecode(
+    api_key="al_your_api_key",
+    endpoint="https://your-app.vercel.app"
+)
+
+with agent.session("Customer Support Agent") as session:
+    with session.span("classify_intent", span_type="llm") as span:
+        span.model = "gpt-4o-mini"
+        span.input = {"message": "Cancel my subscription"}
+        span.output = {"intent": "cancellation", "confidence": 0.97}
+        span.input_tokens = 24
+        span.output_tokens = 8
+
+    with session.span("generate_response", span_type="llm") as span:
+        span.model = "gpt-4o"
+        span.input = {"context": "Pro user", "intent": "cancellation"}
+        span.output = {"response": "I understand you'd like to cancel..."}
+        span.input_tokens = 85
+        span.output_tokens = 120
+        span.cost_usd = 0.003
+
+# All spans are batched and sent automatically on session exit
+```
+
+[View on PyPI](https://pypi.org/project/agentdecode/0.1.0/) · [SDK source code](agentdecode-python-sdk/)
+
+### Raw HTTP (any language)
+
+Send traces from any language using a simple POST request — no SDK needed.
 
 ```javascript
 const response = await fetch('https://your-app.vercel.app/api/ingest', {
@@ -146,7 +185,7 @@ const response = await fetch('https://your-app.vercel.app/api/ingest', {
 });
 ```
 
-See the in-app **Documentation** page for Python examples, parent-child span linking, error tracking, and the full API reference.
+See the in-app **Documentation** page for cURL examples, parent-child span linking, error tracking, and the full API reference.
 
 ---
 

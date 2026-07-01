@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentdecode"
+version = "0.1.0"
+description = "Free, open-source observability for AI agents. Trace LLM calls, catch silent failures, score output quality."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    {name = "AgentDecode", email = "agentdecode@proton.me"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Monitoring",
+]
+keywords = ["ai", "agents", "observability", "tracing", "llm", "monitoring"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sreemani0323/AgentDecode"
+Repository = "https://github.com/sreemani0323/AgentDecode"
+Documentation = "https://github.com/sreemani0323/AgentDecode#readme"
+Issues = "https://github.com/sreemani0323/AgentDecode/issues"
+
+[tool.setuptools.packages.find]
+include = ["agentdecode*"]

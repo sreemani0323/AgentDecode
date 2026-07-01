@@ -13,16 +13,21 @@ export default function DocsPage() {
       </div>
 
       {/* Quick Links */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <a href="#python-sdk" className="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors group">
+          <Zap className="w-5 h-5 text-primary mb-2" />
+          <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Python SDK</h3>
+          <p className="text-xs text-muted-foreground mt-1">pip install agentdecode</p>
+        </a>
         <a href="#quickstart" className="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors group">
           <Terminal className="w-5 h-5 text-primary mb-2" />
-          <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Quickstart</h3>
-          <p className="text-xs text-muted-foreground mt-1">Send your first trace in 30 seconds</p>
+          <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">HTTP API</h3>
+          <p className="text-xs text-muted-foreground mt-1">Raw HTTP from any language</p>
         </a>
         <a href="#examples" className="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors group">
           <Code2 className="w-5 h-5 text-primary mb-2" />
           <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Code Examples</h3>
-          <p className="text-xs text-muted-foreground mt-1">Python, JavaScript, and cURL examples</p>
+          <p className="text-xs text-muted-foreground mt-1">Python, JavaScript, and cURL</p>
         </a>
         <a href="#api-reference" className="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors group">
           <BookOpen className="w-5 h-5 text-primary mb-2" />
@@ -31,18 +36,116 @@ export default function DocsPage() {
         </a>
       </div>
 
-      {/* Quickstart */}
+      {/* Python SDK */}
+      <section id="python-sdk" className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">Python SDK</h2>
+        </div>
+
+        <div className="p-6 rounded-xl border border-border bg-card space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Install from PyPI</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto">
+              <code>pip install agentdecode</code>
+            </pre>
+            <p className="text-xs text-muted-foreground">
+              Zero dependencies &mdash; uses only Python stdlib.{" "}
+              <a href="https://pypi.org/project/agentdecode/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">View on PyPI &rarr;</a>
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`from agentdecode import AgentDecode
+
+agent = AgentDecode(
+    api_key="al_your_api_key",
+    endpoint="https://your-domain.com"
+)
+
+with agent.session("Customer Support Agent") as session:
+    with session.span("classify_intent", span_type="llm") as span:
+        span.model = "gpt-4o-mini"
+        span.input = {"message": "Cancel my subscription"}
+        # ... your LLM call here ...
+        span.output = {"intent": "cancellation", "confidence": 0.97}
+        span.input_tokens = 24
+        span.output_tokens = 8
+
+    with session.span("lookup_account", span_type="tool") as span:
+        span.input = {"user_id": "usr_9281"}
+        # ... your DB/API call here ...
+        span.output = {"plan": "pro", "months_active": 14}
+
+    with session.span("generate_response", span_type="llm") as span:
+        span.model = "gpt-4o"
+        span.input = {"context": "Pro user, 14 months", "intent": "cancellation"}
+        # ... your LLM call here ...
+        span.output = {"response": "I understand you'd like to cancel..."}
+        span.input_tokens = 85
+        span.output_tokens = 120
+        span.cost_usd = 0.003
+
+# All spans are batched and sent automatically when the session exits`}</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Nested spans (parent-child)</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`with agent.session("RAG Pipeline") as session:
+    with session.span("orchestrator", span_type="agent") as parent:
+        parent.input = {"query": "What is our refund policy?"}
+
+        with session.span("search_docs", span_type="retrieval", parent=parent) as s:
+            s.input = {"query": "refund policy", "top_k": 5}
+            s.output = {"documents": ["doc1", "doc2"], "count": 2}
+
+        with session.span("generate_answer", span_type="llm", parent=parent) as s:
+            s.model = "gpt-4o"
+            s.input = {"context": ["doc1", "doc2"]}
+            s.output = {"answer": "Our refund policy allows..."}
+
+        parent.output = {"answer": "Our refund policy allows..."}`}</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Decorator</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`@agent.trace("classify_intent", span_type="llm")
+def classify(message: str) -> dict:
+    # Your logic here — input/output captured automatically
+    return {"intent": "support", "confidence": 0.95}
+
+result = classify("I need help")  # sends a single-span trace`}</code>
+            </pre>
+          </div>
+
+          <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-green-400">Error tracking:</strong> Exceptions inside spans are automatically captured with{" "}
+              <code className="text-xs bg-muted/50 px-1 py-0.5 rounded font-mono">status: &quot;error&quot;</code> and the message stored in{" "}
+              <code className="text-xs bg-muted/50 px-1 py-0.5 rounded font-mono">error_message</code>. The session is still sent so you see exactly where things broke.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Raw HTTP Quickstart */}
       <section id="quickstart" className="space-y-4">
         <div className="flex items-center gap-2">
           <Terminal className="w-5 h-5 text-primary" />
-          <h2 className="text-xl font-bold text-foreground">Quickstart — Direct HTTP Integration</h2>
+          <h2 className="text-xl font-bold text-foreground">Raw HTTP API</h2>
         </div>
 
         <div className="p-6 rounded-xl border border-border bg-card space-y-4">
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4 text-primary" />
             <p className="text-sm font-semibold text-foreground">
-              Works with any language — no SDK installation required.
+              Don&apos;t use Python? Send traces from any language via HTTP &mdash; no SDK needed.
             </p>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -260,12 +363,13 @@ console.log(\`Spans ingested: \${result.spans_ingested}\`);`}</code>
           </pre>
         </div>
 
-        {/* Planned SDK note */}
+        {/* SDK note */}
         <div className="p-4 rounded-xl bg-primary/5 border border-primary/20">
           <p className="text-sm text-muted-foreground">
-            <strong className="text-primary">Looking for a typed SDK?</strong>{" "}
-            A TypeScript and Python SDK with automatic instrumentation is planned.
-            For now, the HTTP API above gives you full functionality in any language.
+            <strong className="text-primary">Python SDK available:</strong>{" "}
+            <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded font-mono">pip install agentdecode</code> &mdash; zero dependencies, context-manager API.{" "}
+            <a href="#python-sdk" className="text-primary hover:underline">See Python SDK docs above</a>.{" "}
+            A TypeScript SDK is planned.
           </p>
         </div>
       </section>
