@@ -62,7 +62,7 @@ export default function DocsPage() {
 
 agent = AgentDecode(
     api_key="al_your_api_key",
-    endpoint="https://your-domain.com"
+    endpoint="https://agent-decode.vercel.app"
 )
 
 with agent.session("Customer Support Agent") as session:
@@ -169,7 +169,7 @@ result = classify("I need help")  # sends a single-span trace`}</code>
               Use any HTTP client to POST your trace data. Here&apos;s a minimal example:
             </p>
             <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
-              <code>{`curl -X POST https://your-domain.com/api/ingest \\
+              <code>{`curl -X POST https://agent-decode.vercel.app/api/ingest \\
   -H "Authorization: Bearer al_your_api_key" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -221,7 +221,7 @@ result = classify("I need help")  # sends a single-span trace`}</code>
 from datetime import datetime, timezone
 
 API_KEY = "al_your_key_here"
-ENDPOINT = "https://your-domain.com/api/ingest"
+ENDPOINT = "https://agent-decode.vercel.app/api/ingest"
 
 def send_trace(session_name, spans):
     """Send a trace session to AgentDecode."""
@@ -295,7 +295,7 @@ print(f"Spans ingested: {result['spans_ingested']}")`}</code>
           </p>
           <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
             <code>{`const API_KEY = "al_your_key_here";
-const ENDPOINT = "https://your-domain.com/api/ingest";
+const ENDPOINT = "https://agent-decode.vercel.app/api/ingest";
 
 async function sendTrace(sessionName, spans) {
   const response = await fetch(ENDPOINT, {
