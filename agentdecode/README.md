@@ -1,5 +1,9 @@
 # AgentDecode
 
+[![PyPI version](https://badge.fury.io/py/agentdecode.svg)](https://pypi.org/project/agentdecode/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/sreemani0323/AgentDecode/actions/workflows/ci.yml/badge.svg)](https://github.com/sreemani0323/AgentDecode/actions)
+
 **Open-source observability for AI agents.** Trace every LLM call, tool execution, and decision your agent makes — then debug failures with AI-powered diagnostics.
 
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org/)
