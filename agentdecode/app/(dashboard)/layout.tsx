@@ -30,11 +30,10 @@ export default async function DashboardLayout({
         <div className="p-6">
           <Link href="/dashboard" className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
-              <Activity className="w-5 h-5 text-primary" />
+              <Activity className="w-5 h-5" style={{ color: '#059669' }} />
             </div>
             <span
-              className="text-lg text-foreground"
-              style={{ fontFamily: "'Clash Display', sans-serif", fontWeight: 700, letterSpacing: '-0.02em' }}
+              className="text-lg font-semibold text-gray-900"              style={{ fontFamily: "'Clash Display', sans-serif", fontWeight: 700, letterSpacing: '-0.02em' }}
             >
               AgentDecode
             </span>

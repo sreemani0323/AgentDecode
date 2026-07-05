@@ -73,17 +73,28 @@ export default async function DashboardPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-6 rounded-xl border border-border bg-card">
-              <h3 className="text-sm font-medium text-muted-foreground">Total Projects</h3>
-              <p className="text-3xl font-bold text-foreground mt-2">{totalProjects}</p>
+            <div className="p-6 rounded-xl border border-border bg-card" style={{ borderLeft: '3px solid #6366f1' }}>
+              <p className="text-sm text-gray-500">Total Projects</p>
+              <p className="text-4xl font-bold text-foreground mt-1">{totalProjects}</p>
             </div>
-            <div className="p-6 rounded-xl border border-border bg-card">
-              <h3 className="text-sm font-medium text-muted-foreground">Sessions (All time)</h3>
-              <p className="text-3xl font-bold text-foreground mt-2">{sessionsToday}</p>
+            <div className="p-6 rounded-xl border border-border bg-card" style={{ borderLeft: '3px solid #0ea5e9' }}>
+              <p className="text-sm text-gray-500">Sessions (All time)</p>
+              <p className="text-4xl font-bold text-foreground mt-1">{sessionsToday}</p>
             </div>
-            <div className="p-6 rounded-xl border border-border bg-card">
-              <h3 className="text-sm font-medium text-muted-foreground">Errors (All time)</h3>
-              <p className="text-3xl font-bold text-red-400 mt-2">{errorsToday}</p>
+            <div
+              className="p-6 rounded-xl border border-border bg-card"
+              style={{
+                borderLeft: errorsToday > 0 ? '3px solid #ef4444' : '3px solid #22c55e',
+                background: errorsToday > 0 ? 'rgba(239,68,68,0.04)' : undefined,
+              }}
+            >
+              <p className="text-sm text-gray-500">Errors (All time)</p>
+              <p
+                className="text-4xl font-bold mt-1"
+                style={{ color: errorsToday > 0 ? '#ef4444' : '#22c55e' }}
+              >
+                {errorsToday}
+              </p>
             </div>
           </div>
 

@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
-import { Button } from "@/components/ui/button"
 
 interface ProjectCardProps {
   project: any; 
@@ -12,53 +11,98 @@ interface ProjectCardProps {
 
 export default function ProjectCard({ project, sessionCount, errorCount }: ProjectCardProps) {
   const errorRate = sessionCount > 0 ? errorCount / sessionCount : 0
-  
-  let errorRateClass = "bg-gray-500/10 text-gray-400"
-  if (sessionCount > 0) {
-    if (errorRate > 0.1) errorRateClass = "bg-red-500/10 text-red-400"
-    else if (errorRate < 0.05) errorRateClass = "bg-green-500/10 text-green-400"
-    else errorRateClass = "bg-yellow-500/10 text-yellow-400"
+  const errorPct = (errorRate * 100).toFixed(1)
+
+  // Health banner config
+  let bannerBg = ''
+  let bannerBorder = ''
+  let bannerText = ''
+  let bannerColor = ''
+
+  if (sessionCount === 0) {
+    // No data yet
+    bannerBg = '#f9fafb'
+    bannerBorder = '#e5e7eb'
+    bannerText = '— No sessions yet'
+    bannerColor = '#6b7280'
+  } else if (errorRate > 0.2) {
+    bannerBg = '#fef2f2'
+    bannerBorder = '#fecaca'
+    bannerText = `⚠ ${errorPct}% error rate`
+    bannerColor = '#dc2626'
+  } else if (errorRate >= 0.05) {
+    bannerBg = '#fffbeb'
+    bannerBorder = '#fde68a'
+    bannerText = `⚠ ${errorPct}% error rate`
+    bannerColor = '#d97706'
+  } else {
+    bannerBg = '#f0fdf4'
+    bannerBorder = '#bbf7d0'
+    bannerText = '✓ Healthy'
+    bannerColor = '#16a34a'
   }
 
   return (
-    <div className="group flex flex-col p-6 rounded-xl border border-border bg-card hover:border-primary/50 transition-colors">
-      <div className="flex-1 space-y-2">
-        <h3 className="text-xl font-bold text-foreground truncate">{project.name}</h3>
-        <p className="text-sm text-muted-foreground line-clamp-2 min-h-[40px]">
-          {project.description || "No description provided."}
-        </p>
-      </div>
-
-      <div className="mt-6 flex items-center justify-between border-t border-border pt-4">
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col">
-            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Sessions</span>
-            <span className="text-lg font-semibold text-foreground">{sessionCount}</span>
+    <Link href={`/projects/${project.id}`} className="block group">
+      <div
+        className="flex flex-col rounded-xl border border-border bg-card transition-all duration-150 overflow-hidden"
+        style={{
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)'
+          e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06)'
+          e.currentTarget.style.borderColor = ''
+        }}
+      >
+        <div className="p-6 flex-1 space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-semibold text-foreground truncate">{project.name}</h3>
+            <span
+              className="text-muted-foreground/50 group-hover:text-foreground transition-transform duration-150 group-hover:translate-x-1"
+              style={{ fontSize: '18px' }}
+            >
+              →
+            </span>
           </div>
-          <div className="flex flex-col">
-            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Errors</span>
-            <div className="flex items-center gap-2">
+          <p className="text-sm text-muted-foreground line-clamp-2 min-h-[40px]">
+            {project.description || "No description provided."}
+          </p>
+        </div>
+
+        <div className="px-6 pb-4 flex items-center justify-between border-t border-border pt-4">
+          <div className="flex items-center gap-6">
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Sessions</span>
+              <span className="text-lg font-semibold text-foreground">{sessionCount}</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Errors</span>
               <span className="text-lg font-semibold text-foreground">{errorCount}</span>
-              {sessionCount > 0 && (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${errorRateClass}`}>
-                  {(errorRate * 100).toFixed(1)}%
-                </span>
-              )}
             </div>
           </div>
+          <span className="text-xs text-muted-foreground">
+            {formatDistanceToNow(new Date(project.created_at), { addSuffix: true })}
+          </span>
+        </div>
+
+        {/* Health banner */}
+        <div
+          style={{
+            background: bannerBg,
+            borderTop: `1px solid ${bannerBorder}`,
+            color: bannerColor,
+            padding: '8px 24px',
+            fontSize: '13px',
+            fontWeight: 500,
+          }}
+        >
+          {bannerText}
         </div>
       </div>
-
-      <div className="mt-6 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          Created {formatDistanceToNow(new Date(project.created_at), { addSuffix: true })}
-        </span>
-        <Link href={`/projects/${project.id}`}>
-          <Button variant="outline" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity">
-            View Project
-          </Button>
-        </Link>
-      </div>
-    </div>
+    </Link>
   )
 }

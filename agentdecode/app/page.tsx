@@ -258,8 +258,8 @@ export default function LandingPage() {
             <div className="lp-features-grid">
               {/* Feature 1 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#eff6ff' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#3b82f6' }}>
                     <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
                   </svg>
                 </div>
@@ -272,8 +272,8 @@ export default function LandingPage() {
 
               {/* Feature 2 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#fef2f2' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#ef4444' }}>
                     <circle cx="12" cy="12" r="10" />
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -288,8 +288,8 @@ export default function LandingPage() {
 
               {/* Feature 3 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#f0fdf4' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#22c55e' }}>
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                   </svg>
                 </div>
@@ -302,8 +302,8 @@ export default function LandingPage() {
 
               {/* Feature 4 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#fffbeb' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#f59e0b' }}>
                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                     <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                   </svg>
@@ -317,8 +317,8 @@ export default function LandingPage() {
 
               {/* Feature 5 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#f5f3ff' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#8b5cf6' }}>
                     <polyline points="16 18 22 12 16 6" />
                     <polyline points="8 6 2 12 8 18" />
                   </svg>
@@ -332,8 +332,8 @@ export default function LandingPage() {
 
               {/* Feature 6 */}
               <div className="lp-feature-card scroll-reveal">
-                <div className="lp-feature-icon">
-                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                <div className="lp-feature-icon" style={{ background: '#ecfdf5' }}>
+                  <svg viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: '#10b981' }}>
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>

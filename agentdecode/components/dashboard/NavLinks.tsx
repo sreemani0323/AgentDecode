@@ -34,9 +34,14 @@ export default function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
             className={cn(
               'flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors',
               isActive
-                ? 'bg-primary/10 text-primary border-l-2 border-primary font-medium'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent'
+                ? 'font-medium'
+                : 'text-muted-foreground hover:text-foreground border-l-[3px] border-transparent'
             )}
+            style={isActive ? {
+              background: '#f0fdf4',
+              borderLeft: '3px solid #059669',
+              color: '#059669',
+            } : undefined}
           >
             <Icon className="h-4 w-4" />
             {link.label}

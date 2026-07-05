@@ -43,10 +43,14 @@ export default function SessionsTable({ sessions }: SessionsTableProps) {
               <tr
                 key={session.id}
                 onClick={() => router.push(`/sessions/${session.id}`)}
-                className="border-b border-border/50 last:border-b-0 hover:bg-white/[0.02] cursor-pointer transition-colors"
+                className="border-b border-border/50 last:border-b-0 hover:bg-gray-50/50 cursor-pointer transition-colors"
+                style={session.status === 'error' ? {
+                  borderLeft: '3px solid #ef4444',
+                  background: 'rgba(239,68,68,0.02)',
+                } : undefined}
               >
                 <td className="px-6 py-4">
-                  <span className="text-sm font-medium text-foreground">
+                  <span className="text-sm font-medium text-gray-900">
                     {session.name || 'Unnamed Session'}
                   </span>
                 </td>
@@ -56,11 +60,11 @@ export default function SessionsTable({ sessions }: SessionsTableProps) {
                 <td className="px-4 py-4">
                   {session.hasLlmSpans ? (
                     session.hasLowQuality ? (
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+                      <span className="text-xs font-medium px-2 py-1 rounded-full border" style={{ background: '#fffbeb', color: '#d97706', borderColor: '#fde68a' }}>
                         ⚠ Low Quality
                       </span>
                     ) : (
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
+                      <span className="text-xs font-medium px-2 py-1 rounded-full border" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
                         ✓ Good
                       </span>
                     )
