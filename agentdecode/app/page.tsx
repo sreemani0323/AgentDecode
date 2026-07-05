@@ -99,7 +99,7 @@ export default function LandingPage() {
           <ul className="lp-nav-links">
             <li><Link href="#features">Features</Link></li>
             <li><Link href="#how-it-works">How it works</Link></li>
-            <li><a href="https://github.com/agentdecode" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+            <li><a href="https://github.com/sreemani0323/AgentDecode" target="_blank" rel="noopener noreferrer">GitHub</a></li>
           </ul>
           <Link href="/login" className="lp-nav-login">Log in</Link>
           <Link href="/signup" className="lp-btn-primary">Get started free</Link>
@@ -490,7 +490,7 @@ export default function LandingPage() {
             <ul className="lp-footer-links">
               <li><Link href="#features">Features</Link></li>
               <li><Link href="/dashboard">Dashboard</Link></li>
-              <li><a href="https://github.com/agentdecode" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+              <li><a href="https://github.com/sreemani0323/AgentDecode" target="_blank" rel="noopener noreferrer">GitHub</a></li>
             </ul>
           </div>
 
