@@ -1106,7 +1106,7 @@
 .lp-footer-col-title {
   font-size: var(--text-sm);
   font-weight: 700;
-  color: #374151;
+  color: #6b7280;
   margin-bottom: var(--space-4);
   letter-spacing: 0.02em;
 }
@@ -1140,7 +1140,7 @@
 
 .lp-footer-copyright {
   font-size: var(--text-xs);
-  color: #9ca3af;
+  color: #6b7280;
 }
 
 .lp-footer-bottom-links {
@@ -1150,12 +1150,12 @@
 
 .lp-footer-bottom-links a {
   font-size: var(--text-xs);
-  color: #9ca3af;
+  color: #6b7280;
   transition: color 0.15s ease;
 }
 
 .lp-footer-bottom-links a:hover {
-  color: #374151;
+  color: #111827;
 }
 
 
