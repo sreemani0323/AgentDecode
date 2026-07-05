@@ -9,7 +9,15 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4+-blue)](https://www.typescriptlang.org/)
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres-green)](https://supabase.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+---
+
+## Live Demo
+
+🌐 **Dashboard**: https://agent-decode.vercel.app  
+📦 **Python SDK**: https://pypi.org/project/agentdecode/  
+
+Sign up for free — no credit card required.
 
 ---
 
@@ -37,7 +45,7 @@ AI agents are opaque. When they fail, you get a stack trace — not an explanati
 | AI — Eval Scoring | Groq (llama-3.3-70b-versatile) |
 | AI — Error Diagnosis | Google Gemini (gemini-2.0-flash) |
 | Email | Resend |
-| SDK | TypeScript (CJS/ESM via tsup) |
+| SDK | Python ([agentdecode](https://pypi.org/project/agentdecode/) — zero dependencies) |
 
 **Total cost to run: $0.** Everything uses free tiers.
 
@@ -67,7 +75,7 @@ npm install
 ### 3. Set up Supabase
 
 1. Create a new Supabase project at [supabase.com/dashboard](https://supabase.com/dashboard)
-2. Go to **SQL Editor** and run the contents of [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql)
+2. Run all SQL files in `agentdecode/supabase/migrations/` in order (001 through 005) in the Supabase SQL Editor
 3. Go to **Authentication → Providers** and enable Email and (optionally) Google OAuth
 
 ### 4. Configure environment variables
@@ -121,8 +129,6 @@ agentdecode/
 
 ### Python SDK
 
-The fastest way to get started — zero dependencies, uses only Python stdlib.
-
 ```bash
 pip install agentdecode
 ```
@@ -131,37 +137,27 @@ pip install agentdecode
 from agentdecode import AgentDecode
 
 agent = AgentDecode(
-    api_key="al_your_api_key",
-    endpoint="https://your-app.vercel.app"
+    api_key="al_your_key_here",
+    endpoint="https://agent-decode.vercel.app"
 )
 
-with agent.session("Customer Support Agent") as session:
-    with session.span("classify_intent", span_type="llm") as span:
-        span.model = "gpt-4o-mini"
-        span.input = {"message": "Cancel my subscription"}
-        span.output = {"intent": "cancellation", "confidence": 0.97}
-        span.input_tokens = 24
-        span.output_tokens = 8
-
-    with session.span("generate_response", span_type="llm") as span:
+with agent.session("my_agent_run") as session:
+    with session.span("llm.call", span_type="llm") as span:
+        span.input = {"prompt": "Hello"}
+        span.output = {"response": "Hi there!"}
         span.model = "gpt-4o"
-        span.input = {"context": "Pro user", "intent": "cancellation"}
-        span.output = {"response": "I understand you'd like to cancel..."}
-        span.input_tokens = 85
-        span.output_tokens = 120
-        span.cost_usd = 0.003
-
-# All spans are batched and sent automatically on session exit
+        span.input_tokens = 10
+        span.output_tokens = 5
 ```
 
-[View on PyPI](https://pypi.org/project/agentdecode/0.1.0/) · [SDK source code](agentdecode-python-sdk/)
+Get your API key from the dashboard at [agent-decode.vercel.app](https://agent-decode.vercel.app)
 
 ### Raw HTTP (any language)
 
 Send traces from any language using a simple POST request — no SDK needed.
 
 ```javascript
-const response = await fetch('https://your-app.vercel.app/api/ingest', {
+const response = await fetch('https://agent-decode.vercel.app/api/ingest', {
   method: 'POST',
   headers: {
     'Authorization': 'Bearer al_your_api_key',
