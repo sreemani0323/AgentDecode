@@ -45,25 +45,29 @@ export default function ProjectCard({ project, sessionCount, errorCount }: Proje
   return (
     <Link href={`/projects/${project.id}`} className="block group">
       <div
-        className="flex flex-col rounded-xl border border-border bg-card transition-all duration-150 overflow-hidden"
+        className="flex flex-col rounded-xl border border-border bg-card overflow-hidden"
         style={{
+          cursor: 'pointer',
+          transition: 'box-shadow 150ms ease, transform 150ms ease',
           boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)'
-          e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)'
+          e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04)'
+          e.currentTarget.style.transform = 'translateY(-1px)'
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06)'
-          e.currentTarget.style.borderColor = ''
+          e.currentTarget.style.transform = 'translateY(0)'
         }}
       >
         <div className="p-6 flex-1 space-y-2">
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-semibold text-foreground truncate">{project.name}</h3>
             <span
-              className="text-muted-foreground/50 group-hover:text-foreground transition-transform duration-150 group-hover:translate-x-1"
-              style={{ fontSize: '18px' }}
+              className="transition-all duration-150 group-hover:translate-x-1"
+              style={{ fontSize: '18px', color: '#6b7280' }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = '#111827' }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = '#6b7280' }}
             >
               →
             </span>
