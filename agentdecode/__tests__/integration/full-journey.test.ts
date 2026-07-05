@@ -393,6 +393,35 @@ describe('Full Journey Integration Tests', () => {
       started_at: '2026-06-25T10:00:00Z',
     })
 
+    // Reset modules so the explain route re-imports with our new mock
+    vi.resetModules()
+
+    // Re-register all mocks (needed after resetModules)
+    vi.doMock('@/lib/logger', () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock('@/lib/env', () => ({
+      checkEnv: () => ({ ok: true, missing: [], warnings: [] }),
+    }))
+    vi.doMock('@/lib/rate-limit', () => ({
+      ingestRateLimiter: {
+        check: () => ({ allowed: true, remaining: 49, retryAfterMs: 0 }),
+      },
+      getClientIdentifier: () => 'test-client',
+      checkRateLimit: () => ({ allowed: true }),
+    }))
+    vi.doMock('@/lib/supabase/server', () => ({
+      createServiceClient: () => ({
+        from: (table: string) => createMockQueryBuilder(table),
+      }),
+      createClient: () => Promise.resolve({
+        from: (table: string) => createMockQueryBuilder(table),
+        auth: {
+          getUser: () => Promise.resolve({ data: { user: { id: 'user-1' } } }),
+        },
+      }),
+    }))
+
     // Override Gemini mock to throw
     vi.doMock('@/lib/gemini', () => ({
       explainSpanFailure: () => Promise.reject(new Error('Gemini parse failure')),
