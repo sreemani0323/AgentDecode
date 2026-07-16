@@ -28,21 +28,7 @@ export async function middleware(request: NextRequest) {
       return withSecurityHeaders(NextResponse.next())
     }
 
-    const { supabase, response } = await updateSession(request)
-
-    if (!supabase) {
-      return withSecurityHeaders(response)
-    }
-
-    let user = null
-    try {
-      const {
-        data: { user: currentUser },
-      } = await supabase.auth.getUser()
-      user = currentUser
-    } catch (error) {
-      logger.error('Failed to get user session', error as Error, { context: 'middleware' })
-    }
+    const { user, response } = await updateSession(request)
 
     // /(dashboard) routes -> if no session, redirect to /login
     const isDashboardRoute = pathname.startsWith('/dashboard') || 

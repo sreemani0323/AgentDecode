@@ -12,7 +12,7 @@ export async function updateSession(request: NextRequest) {
 
   if (!supabaseUrl || !supabaseAnonKey) {
     logger.warn('Missing Supabase environment variables in middleware')
-    return { supabase: null, response: supabaseResponse }
+    return { supabase: null, user: null, response: supabaseResponse }
   }
 
   try {
@@ -42,11 +42,11 @@ export async function updateSession(request: NextRequest) {
     )
 
     // refreshing the auth token
-    await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
 
-    return { supabase, response: supabaseResponse }
+    return { supabase, user, response: supabaseResponse }
   } catch (error) {
     logger.error('Exception during updateSession in middleware', error as Error)
-    return { supabase: null, response: supabaseResponse }
+    return { supabase: null, user: null, response: supabaseResponse }
   }
 }
