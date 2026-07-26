@@ -12,10 +12,12 @@ Field names match the server's Zod validation schema exactly:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import inspect
 import json
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -23,6 +25,27 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+# ── Context variables for automatic span nesting ───────────────────────
+
+_current_span: contextvars.ContextVar[Optional["Span"]] = contextvars.ContextVar(
+    "agentdecode_current_span", default=None
+)
+
+_current_session: contextvars.ContextVar[Optional["Session"]] = contextvars.ContextVar(
+    "agentdecode_current_session", default=None
+)
+
+
+def current_session() -> Optional["Session"]:
+    """Return the active Session in this context, or None."""
+    return _current_session.get()
+
+
+def current_span() -> Optional["Span"]:
+    """Return the active Span in this context, or None."""
+    return _current_span.get()
 
 
 class Span:
@@ -59,11 +82,14 @@ class Span:
         self._started_at: Optional[datetime] = None
         self._ended_at: Optional[datetime] = None
         self._status: str = "ok"
+        self._context_token: Optional[contextvars.Token] = None
 
     # ── Context manager ────────────────────────────────────────────
 
     def __enter__(self) -> "Span":
         self._started_at = datetime.now(timezone.utc)
+        # Set this span as the current span in context
+        self._context_token = _current_span.set(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:  # type: ignore[type-arg]
@@ -73,6 +99,10 @@ class Span:
             self.error_message = (
                 self.error_message or f"{type(exc_val).__name__}: {exc_val}"
             )
+        # Reset the context variable to the previous span
+        if self._context_token is not None:
+            _current_span.reset(self._context_token)
+            self._context_token = None
         return False  # do not suppress exceptions
 
     # ── Internal helpers for non-context-manager usage ─────────────
@@ -147,14 +177,21 @@ class Session:
         api_key: str,
         endpoint: str,
         session_id: Optional[str] = None,
+        timeout: int = 10,
+        max_retries: int = 3,
+        flush_timeout: int = 30,
         _send_fn: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.name = name
         self.session_id = session_id
         self._api_key = api_key
         self._endpoint = endpoint
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._flush_timeout = flush_timeout
         self._spans: List[Span] = []
         self._send_fn = _send_fn  # injectable for testing
+        self._context_token: Optional[contextvars.Token] = None
 
     # ── Span factory ───────────────────────────────────────────────
 
@@ -164,7 +201,13 @@ class Session:
         span_type: str = "tool",
         parent: Optional[Span] = None,
     ) -> Span:
-        """Create a child span. Returns a context manager."""
+        """Create a child span. Returns a context manager.
+
+        If ``parent`` is not provided, the current span from contextvars
+        is used automatically (if one exists).
+        """
+        if parent is None:
+            parent = _current_span.get()
         s = Span(name=name, span_type=span_type, parent=parent)
         self._spans.append(s)
         return s
@@ -180,6 +223,8 @@ class Session:
         Used by integration callbacks (e.g. LangChain) where the
         start/end events arrive separately.
         """
+        if parent is None:
+            parent = _current_span.get()
         s = Span(name=name, span_type=span_type, parent=parent)
         s._start()
         self._spans.append(s)
@@ -188,6 +233,7 @@ class Session:
     # ── Context manager ────────────────────────────────────────────
 
     def __enter__(self) -> "Session":
+        self._context_token = _current_session.set(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:  # type: ignore[type-arg]
@@ -198,6 +244,11 @@ class Session:
         except Exception:
             # Print but do not mask the original exception
             traceback.print_exc()
+        finally:
+            # Reset the context variable to previous session
+            if self._context_token is not None:
+                _current_session.reset(self._context_token)
+                self._context_token = None
         return False
 
     # ── Flush ──────────────────────────────────────────────────────
@@ -217,12 +268,41 @@ class Session:
         if self._send_fn is not None:
             return self._send_fn(payload)
 
-        return _http_post(
-            url=f"{self._endpoint}/api/ingest",
-            api_key=self._api_key,
-            payload=payload,
-            silent_fail=silent_fail,
-        )
+        # Use threading to enforce flush_timeout across all retries
+        result: Dict[str, Any] = {}
+        error: Optional[Exception] = None
+
+        def _do_send():
+            nonlocal result, error
+            try:
+                result = _http_post(
+                    url=f"{self._endpoint}/api/ingest",
+                    api_key=self._api_key,
+                    payload=payload,
+                    max_retries=self._max_retries,
+                    timeout=self._timeout,
+                    silent_fail=silent_fail,
+                )
+            except Exception as e:
+                error = e
+
+        thread = threading.Thread(target=_do_send, daemon=True)
+        thread.start()
+        thread.join(timeout=self._flush_timeout)
+
+        if thread.is_alive():
+            # Flush timed out — the thread is still running but we give up
+            print(
+                f"[agentdecode] Warning: flush timed out after "
+                f"{self._flush_timeout}s — trace may be lost",
+                file=sys.stderr,
+            )
+            return {}
+
+        if error is not None:
+            raise error
+
+        return result
 
 
 class AgentDecode:
@@ -240,13 +320,23 @@ class AgentDecode:
                 span.output = result
     """
 
-    def __init__(self, api_key: str, endpoint: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        endpoint: str = "https://agent-decode.vercel.app",
+        timeout: int = 10,
+        max_retries: int = 3,
+        flush_timeout: int = 30,
+    ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
         if not endpoint:
             raise ValueError("endpoint is required")
         self.api_key = api_key
         self.endpoint = endpoint.rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.flush_timeout = flush_timeout
 
     def session(
         self,
@@ -261,6 +351,9 @@ class AgentDecode:
             api_key=self.api_key,
             endpoint=self.endpoint,
             session_id=session_id,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            flush_timeout=self.flush_timeout,
             _send_fn=_send_fn,
         )
 
@@ -281,6 +374,9 @@ class AgentDecode:
             api_key=self.api_key,
             endpoint=self.endpoint,
             session_id=session_id,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            flush_timeout=self.flush_timeout,
             _send_fn=_send_fn,
         )
 
@@ -399,7 +495,7 @@ def _http_post(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "agentdecode-python/0.1.3",
+            "User-Agent": "agentdecode-python/0.1.4",
         },
         method="POST",
     )

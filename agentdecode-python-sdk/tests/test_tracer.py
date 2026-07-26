@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, ".")
 
 from agentdecode import AgentDecode, Session, Span
+from agentdecode.tracer import current_session, current_span
 
 
 class TestSpan(unittest.TestCase):
@@ -382,7 +383,7 @@ class TestPayloadFormat(unittest.TestCase):
         self.assertEqual(parsed["session_name"], "JSON Test")
 
 
-# ── NEW: Retry logic tests ────────────────────────────────────────
+# ── Retry logic tests ─────────────────────────────────────────────
 
 
 class TestRetryLogic(unittest.TestCase):
@@ -510,7 +511,7 @@ class TestRetryLogic(unittest.TestCase):
         mock_sleep.assert_any_call(1.0)
 
 
-# ── NEW: Async support tests ──────────────────────────────────────
+# ── Async support tests ───────────────────────────────────────────
 
 
 class TestAsyncSupport(unittest.TestCase):
@@ -584,7 +585,7 @@ class TestAsyncSupport(unittest.TestCase):
         self.assertEqual(my_async_function.__name__, "my_async_function")
 
 
-# ── NEW: LangChain handler tests ──────────────────────────────────
+# ── LangChain handler tests ───────────────────────────────────────
 
 
 class TestLangChainHandler(unittest.TestCase):
@@ -592,7 +593,6 @@ class TestLangChainHandler(unittest.TestCase):
 
     def test_handler_raises_without_langchain(self):
         """If langchain is not installed, constructor raises ImportError."""
-        # We simulate langchain being unavailable by patching the flag
         from agentdecode.integrations import langchain as lc_module
 
         original = lc_module.LANGCHAIN_AVAILABLE
@@ -779,6 +779,315 @@ class TestLangChainHandler(unittest.TestCase):
         self.assertTrue(flush_called)
 
 
+# ── Context variables tests ───────────────────────────────────────
+
+
+class TestContextVars(unittest.TestCase):
+    """Tests for automatic span nesting via contextvars."""
+
+    def test_automatic_nesting(self):
+        """Spans created inside another span auto-nest under it."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        # Helper function that uses current_session() — no explicit parent
+        def search_docs(query):
+            session = current_session()
+            if session:
+                with session.span("search_docs", span_type="retrieval") as span:
+                    span.input = {"query": query}
+                    span.output = {"results": 3}
+                    return [1, 2, 3]
+            return []
+
+        with agent.session("Auto Nest Test", _send_fn=capture) as session:
+            with session.span("orchestrator", span_type="agent") as parent:
+                parent.input = {"task": "answer question"}
+                # This should automatically nest under "orchestrator"
+                docs = search_docs("refund policy")
+                parent.output = {"docs": len(docs)}
+
+        spans = captured["spans"]
+        self.assertEqual(len(spans), 2)
+
+        # orchestrator is root (no parent)
+        self.assertNotIn("parent_client_span_id", spans[0])
+
+        # search_docs should be child of orchestrator
+        self.assertEqual(spans[1]["name"], "search_docs")
+        self.assertEqual(
+            spans[1]["parent_client_span_id"],
+            spans[0]["client_span_id"],
+        )
+
+    def test_deep_automatic_nesting(self):
+        """Three levels of automatic nesting work correctly."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        def level_2_function():
+            session = current_session()
+            if session:
+                with session.span("level_2", span_type="tool") as span:
+                    span.output = {"depth": 2}
+
+        def level_1_function():
+            session = current_session()
+            if session:
+                with session.span("level_1", span_type="llm") as span:
+                    span.output = {"depth": 1}
+                    level_2_function()  # should nest under level_1
+
+        with agent.session("Deep Nest", _send_fn=capture) as session:
+            with session.span("root", span_type="agent") as root:
+                level_1_function()  # should nest under root
+
+        spans = captured["spans"]
+        self.assertEqual(len(spans), 3)
+
+        root_id = spans[0]["client_span_id"]
+        level1_id = spans[1]["client_span_id"]
+
+        # root has no parent
+        self.assertNotIn("parent_client_span_id", spans[0])
+        # level_1 is child of root
+        self.assertEqual(spans[1]["parent_client_span_id"], root_id)
+        # level_2 is child of level_1
+        self.assertEqual(spans[2]["parent_client_span_id"], level1_id)
+
+    def test_current_session_returns_none_outside(self):
+        """current_session() returns None when called outside a session block."""
+        self.assertIsNone(current_session())
+
+    def test_current_span_returns_none_outside(self):
+        """current_span() returns None outside a span block."""
+        self.assertIsNone(current_span())
+
+    def test_nesting_resets_after_exit(self):
+        """current_span() resets to None after exiting a span block."""
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        def capture(payload):
+            return {}
+
+        with agent.session("Reset Test", _send_fn=capture) as session:
+            self.assertIsNotNone(current_session())
+            with session.span("temp_span") as span:
+                self.assertIsNotNone(current_span())
+                self.assertEqual(current_span(), span)
+
+            # After exiting the span, current_span should reset
+            self.assertIsNone(current_span())
+
+        # After exiting the session, current_session should reset
+        self.assertIsNone(current_session())
+
+    def test_explicit_parent_overrides_contextvar(self):
+        """When parent is explicitly passed, it takes precedence over the contextvar."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        with agent.session("Override Test", _send_fn=capture) as session:
+            with session.span("span_a", span_type="agent") as a:
+                with session.span("span_b", span_type="agent") as b:
+                    # Explicitly pass span_a as parent (even though span_b is current)
+                    with session.span("child", span_type="tool", parent=a) as c:
+                        c.output = "test"
+
+        spans = captured["spans"]
+        child_span = [s for s in spans if s["name"] == "child"][0]
+        a_span = [s for s in spans if s["name"] == "span_a"][0]
+        # child should have span_a as parent (explicit), not span_b (contextvar)
+        self.assertEqual(child_span["parent_client_span_id"], a_span["client_span_id"])
+
+
+# ── Flush timeout tests ───────────────────────────────────────────
+
+
+class TestFlushTimeout(unittest.TestCase):
+    """Tests for configurable timeout, max_retries, and flush_timeout."""
+
+    def test_timeout_parameter_accepted(self):
+        """AgentDecode accepts timeout parameter without error."""
+        agent = AgentDecode(
+            api_key="al_test",
+            endpoint="http://localhost",
+            timeout=5,
+        )
+        self.assertEqual(agent.timeout, 5)
+
+    def test_max_retries_parameter_accepted(self):
+        """AgentDecode accepts max_retries parameter."""
+        agent = AgentDecode(
+            api_key="al_test",
+            endpoint="http://localhost",
+            max_retries=1,
+        )
+        self.assertEqual(agent.max_retries, 1)
+
+    def test_flush_timeout_parameter_accepted(self):
+        """AgentDecode accepts flush_timeout parameter."""
+        agent = AgentDecode(
+            api_key="al_test",
+            endpoint="http://localhost",
+            flush_timeout=15,
+        )
+        self.assertEqual(agent.flush_timeout, 15)
+
+    def test_timeout_passed_to_session(self):
+        """Session inherits timeout/max_retries/flush_timeout from AgentDecode."""
+        agent = AgentDecode(
+            api_key="al_test",
+            endpoint="http://localhost",
+            timeout=7,
+            max_retries=2,
+            flush_timeout=20,
+        )
+        session = agent.session("test")
+        self.assertEqual(session._timeout, 7)
+        self.assertEqual(session._max_retries, 2)
+        self.assertEqual(session._flush_timeout, 20)
+
+    def test_default_values(self):
+        """Default values for timeout, max_retries, flush_timeout."""
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        self.assertEqual(agent.timeout, 10)
+        self.assertEqual(agent.max_retries, 3)
+        self.assertEqual(agent.flush_timeout, 30)
+
+
+# ── OpenAI instrumentation tests ──────────────────────────────────
+
+
+class TestOpenAIInstrumentation(unittest.TestCase):
+    """Tests for the OpenAI auto-instrumentation."""
+
+    def test_instrument_without_openai(self):
+        """If openai is not installed, instrument_openai raises ImportError."""
+        from agentdecode.integrations import openai as oai_module
+
+        original = oai_module.OPENAI_AVAILABLE
+        oai_module.OPENAI_AVAILABLE = False
+
+        try:
+            agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+            with self.assertRaises(ImportError) as ctx:
+                oai_module.AgentDecodeOpenAIInstrumentation(agent)
+            self.assertIn("openai is not installed", str(ctx.exception))
+        finally:
+            oai_module.OPENAI_AVAILABLE = original
+
+    def test_instrumentation_creates_span(self):
+        """When openai is available and patched, calling create() produces a span."""
+        from agentdecode.integrations.openai import OPENAI_AVAILABLE
+
+        if not OPENAI_AVAILABLE:
+            self.skipTest("openai not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        # Create a mock OpenAI client
+        mock_client = MagicMock()
+        mock_completions = MagicMock()
+        mock_client.chat.completions = mock_completions
+
+        # Mock the response
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 15
+        mock_usage.completion_tokens = 8
+        mock_usage.total_tokens = 23
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Hello! How can I help you?"
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = mock_usage
+
+        original_create = MagicMock(return_value=mock_response)
+        mock_completions.create = original_create
+
+        # Instrument
+        from agentdecode.integrations.openai import AgentDecodeOpenAIInstrumentation
+
+        instrumentation = AgentDecodeOpenAIInstrumentation(agent)
+        instrumentation._patched_target = mock_completions
+        instrumentation._original_create = original_create
+
+        # Manually patch create to the traced version
+        def traced_create(self_or_client, *args, **kwargs):
+            from agentdecode.tracer import _current_session
+
+            session = _current_session.get()
+            if session is None:
+                return original_create(self_or_client, *args, **kwargs)
+
+            model = kwargs.get("model", "unknown")
+            messages = kwargs.get("messages", [])
+            span_name = f"openai.chat.{model}"
+
+            with session.span(span_name, span_type="llm") as span:
+                span.model = model
+                span.input = {
+                    "messages": [
+                        {"role": m.get("role", "unknown"), "content": str(m.get("content", ""))[:200]}
+                        for m in (messages[-3:] if messages else [])
+                    ]
+                }
+                response = original_create(self_or_client, *args, **kwargs)
+                if hasattr(response, "choices") and response.choices:
+                    content = getattr(response.choices[0].message, "content", None)
+                    if content:
+                        span.output = {"content": content[:500]}
+                if hasattr(response, "usage") and response.usage:
+                    span.input_tokens = response.usage.prompt_tokens
+                    span.output_tokens = response.usage.completion_tokens
+                return response
+
+        mock_completions.create = traced_create
+
+        # Use it inside a session
+        with agent.session("OpenAI Test", _send_fn=capture) as session:
+            mock_completions.create(
+                mock_completions,
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "Hello!"},
+                ],
+            )
+
+        spans = captured["spans"]
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0]["span_type"], "llm")
+        self.assertEqual(spans[0]["name"], "openai.chat.gpt-4o")
+        self.assertEqual(spans[0]["model"], "gpt-4o")
+        self.assertEqual(spans[0]["input_tokens"], 15)
+        self.assertEqual(spans[0]["output_tokens"], 8)
+        self.assertEqual(spans[0]["output"], {"content": "Hello! How can I help you?"})
+
+
 class TestVersion(unittest.TestCase):
     """Version attribute tests."""
 
@@ -786,7 +1095,7 @@ class TestVersion(unittest.TestCase):
         import agentdecode
 
         self.assertTrue(hasattr(agentdecode, "__version__"))
-        self.assertEqual(agentdecode.__version__, "0.1.2")
+        self.assertEqual(agentdecode.__version__, "0.1.4")
 
 
 if __name__ == "__main__":

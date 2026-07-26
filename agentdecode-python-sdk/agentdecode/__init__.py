@@ -1,9 +1,16 @@
 """AgentDecode — Free, open-source observability for AI agents."""
 
-from agentdecode.tracer import AgentDecode, Session, Span
+from agentdecode.tracer import AgentDecode, Session, Span, current_session, current_span
 
-__version__ = "0.1.3"
-__all__ = ["AgentDecode", "Session", "Span"]
+__version__ = "0.1.4"
+__all__ = [
+    "AgentDecode",
+    "Session",
+    "Span",
+    "current_session",
+    "current_span",
+    "__version__",
+]
 
 # Optional: export LangChain handler if langchain is installed
 try:
