@@ -11,8 +11,12 @@ Field names match the server's Zod validation schema exactly:
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import inspect
 import json
+import sys
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -70,6 +74,17 @@ class Span:
                 self.error_message or f"{type(exc_val).__name__}: {exc_val}"
             )
         return False  # do not suppress exceptions
+
+    # ── Internal helpers for non-context-manager usage ─────────────
+
+    def _start(self) -> "Span":
+        """Start timing this span (non-context-manager usage)."""
+        self._started_at = datetime.now(timezone.utc)
+        return self
+
+    def _finish(self) -> None:
+        """Finish timing this span (non-context-manager usage)."""
+        self._ended_at = datetime.now(timezone.utc)
 
     # ── Serialisation ──────────────────────────────────────────────
 
@@ -154,6 +169,22 @@ class Session:
         self._spans.append(s)
         return s
 
+    def _start_span(
+        self,
+        name: str,
+        span_type: str = "tool",
+        parent: Optional[Span] = None,
+    ) -> Span:
+        """Create and start a span without a context manager.
+
+        Used by integration callbacks (e.g. LangChain) where the
+        start/end events arrive separately.
+        """
+        s = Span(name=name, span_type=span_type, parent=parent)
+        s._start()
+        self._spans.append(s)
+        return s
+
     # ── Context manager ────────────────────────────────────────────
 
     def __enter__(self) -> "Session":
@@ -171,7 +202,7 @@ class Session:
 
     # ── Flush ──────────────────────────────────────────────────────
 
-    def _flush(self) -> Dict[str, Any]:
+    def _flush(self, silent_fail: bool = False) -> Dict[str, Any]:
         """Send all collected spans to /api/ingest."""
         if not self._spans:
             return {}
@@ -190,6 +221,7 @@ class Session:
             url=f"{self._endpoint}/api/ingest",
             api_key=self._api_key,
             payload=payload,
+            silent_fail=silent_fail,
         )
 
 
@@ -198,7 +230,7 @@ class AgentDecode:
 
     Example::
 
-        agent = AgentDecode(api_key="al_...", endpoint="https://my-app.vercel.app")
+        agent = AgentDecode(api_key="al_...", endpoint="https://agent-decode.vercel.app")
 
         with agent.session("My Agent Run") as session:
             with session.span("llm_call", span_type="llm") as span:
@@ -232,6 +264,26 @@ class AgentDecode:
             _send_fn=_send_fn,
         )
 
+    def _start_session(
+        self,
+        name: str,
+        session_id: Optional[str] = None,
+        *,
+        _send_fn: Optional[Callable[..., Any]] = None,
+    ) -> Session:
+        """Create a session without using it as a context manager.
+
+        Used by integration callbacks (e.g. LangChain) where the
+        session lifecycle is controlled externally.
+        """
+        return Session(
+            name=name,
+            api_key=self.api_key,
+            endpoint=self.endpoint,
+            session_id=session_id,
+            _send_fn=_send_fn,
+        )
+
     def trace(
         self,
         name: str,
@@ -240,36 +292,75 @@ class AgentDecode:
     ) -> Callable:  # type: ignore[type-arg]
         """Decorator: wraps a function in a single-span session.
 
+        Works with both sync and async functions.
+
         Usage::
 
             @agent.trace("classify_intent", span_type="llm")
             def classify(message: str) -> dict:
                 return {"intent": "support"}
+
+            @agent.trace("async_call", span_type="llm")
+            async def call_llm(prompt: str) -> dict:
+                return await some_async_llm(prompt)
         """
 
         def decorator(fn: Callable) -> Callable:  # type: ignore[type-arg]
-            @functools.wraps(fn)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                sname = session_name or f"{name}"
-                with self.session(sname) as sess:
-                    with sess.span(name, span_type=span_type) as span:
-                        # Capture input
-                        try:
-                            span.input = {"args": args, "kwargs": kwargs}
-                        except Exception:
-                            pass
+            if inspect.iscoroutinefunction(fn):
+                # ── Async version ──────────────────────────────────
+                @functools.wraps(fn)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    sname = session_name or f"{name}"
+                    with self.session(sname) as sess:
+                        with sess.span(name, span_type=span_type) as span:
+                            # Capture input
+                            try:
+                                span.input = {
+                                    "args": str(args)[:200],
+                                    "kwargs": str(kwargs)[:200],
+                                }
+                            except Exception:
+                                pass
 
-                        result = fn(*args, **kwargs)
+                            result = await fn(*args, **kwargs)
 
-                        # Capture output
-                        try:
-                            span.output = result
-                        except Exception:
-                            pass
+                            # Capture output
+                            try:
+                                span.output = (
+                                    result
+                                    if isinstance(result, (dict, list, str, int, float, bool, type(None)))
+                                    else {"result": str(result)[:500]}
+                                )
+                            except Exception:
+                                pass
 
-                        return result
+                            return result
 
-            return wrapper
+                return async_wrapper
+            else:
+                # ── Sync version ───────────────────────────────────
+                @functools.wraps(fn)
+                def wrapper(*args: Any, **kwargs: Any) -> Any:
+                    sname = session_name or f"{name}"
+                    with self.session(sname) as sess:
+                        with sess.span(name, span_type=span_type) as span:
+                            # Capture input
+                            try:
+                                span.input = {"args": args, "kwargs": kwargs}
+                            except Exception:
+                                pass
+
+                            result = fn(*args, **kwargs)
+
+                            # Capture output
+                            try:
+                                span.output = result
+                            except Exception:
+                                pass
+
+                            return result
+
+                return wrapper
 
         return decorator
 
@@ -281,9 +372,25 @@ def _http_post(
     url: str,
     api_key: str,
     payload: Dict[str, Any],
+    max_retries: int = 3,
     timeout: int = 10,
+    silent_fail: bool = False,
 ) -> Dict[str, Any]:
-    """POST JSON to a URL. Returns parsed response body."""
+    """POST JSON to a URL with retry and exponential backoff.
+
+    Args:
+        url: Target URL.
+        api_key: Bearer token for Authorization header.
+        payload: JSON-serializable dict to send.
+        max_retries: Number of attempts before giving up (default 3).
+        timeout: HTTP timeout per request in seconds (default 10).
+        silent_fail: If True, print a warning instead of raising on
+            total failure. Used by the @trace decorator so user code
+            is never crashed by telemetry errors.
+
+    Returns:
+        Parsed JSON response body as a dict.
+    """
     data = json.dumps(payload, default=str).encode("utf-8")
 
     req = Request(
@@ -292,25 +399,54 @@ def _http_post(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "agentdecode-python/0.1.0",
+            "User-Agent": "agentdecode-python/0.1.3",
         },
         method="POST",
     )
 
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            return json.loads(body) if body else {}
-    except HTTPError as e:
-        body = ""
+    last_error: Optional[Exception] = None
+
+    for attempt in range(max_retries):
         try:
-            body = e.read().decode("utf-8")
-        except Exception:
-            pass
-        raise RuntimeError(
-            f"AgentDecode API error {e.code}: {body or e.reason}"
-        ) from e
-    except URLError as e:
-        raise RuntimeError(
-            f"AgentDecode connection error: {e.reason}"
-        ) from e
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8")
+            except Exception:
+                pass
+            last_error = RuntimeError(
+                f"AgentDecode API error {e.code}: {err_body or e.reason}"
+            )
+            # Don't retry on 4xx client errors (except 429 rate limit)
+            if 400 <= e.code < 500 and e.code != 429:
+                break
+        except URLError as e:
+            last_error = RuntimeError(
+                f"AgentDecode connection error: {e.reason}"
+            )
+        except Exception as e:
+            last_error = RuntimeError(
+                f"AgentDecode unexpected error: {e}"
+            )
+
+        # Exponential backoff: 0.5s, 1s, 2s
+        if attempt < max_retries - 1:
+            wait = (2 ** attempt) * 0.5
+            time.sleep(wait)
+
+    # All retries exhausted
+    if silent_fail:
+        print(
+            f"[agentdecode] Warning: failed to send trace after "
+            f"{max_retries} attempts: {last_error}",
+            file=sys.stderr,
+        )
+        return {}
+
+    if last_error is not None:
+        raise last_error
+
+    return {}

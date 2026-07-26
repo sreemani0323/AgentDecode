@@ -4,10 +4,13 @@ All tests use an injectable _send_fn to capture payloads without
 hitting the network.
 """
 
+import asyncio
 import json
 import sys
+import time
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 # Ensure the local package is importable
 sys.path.insert(0, ".")
@@ -90,6 +93,22 @@ class TestSpan(unittest.TestCase):
         self.assertNotIn("cost_usd", d)
         self.assertNotIn("error_message", d)
         self.assertNotIn("parent_client_span_id", d)
+
+    def test_span_start_finish_methods(self):
+        """Test the _start() and _finish() internal helpers."""
+        span = Span("manual_op", span_type="llm")
+        span._start()
+        span.model = "gpt-4o"
+        span.input = {"prompt": "test"}
+        span.output = {"text": "response"}
+        span._finish()
+
+        d = span.to_dict()
+        self.assertEqual(d["name"], "manual_op")
+        self.assertIn("started_at", d)
+        self.assertIn("ended_at", d)
+        self.assertIsInstance(d["duration_ms"], int)
+        self.assertGreaterEqual(d["duration_ms"], 0)
 
 
 class TestSession(unittest.TestCase):
@@ -194,6 +213,31 @@ class TestSession(unittest.TestCase):
             pass
 
         self.assertFalse(send_called)
+
+    def test_start_span_internal_method(self):
+        """Test _start_span() for non-context-manager usage."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        session = agent._start_session("Manual Session", _send_fn=capture)
+
+        span = session._start_span("manual_op", span_type="llm")
+        span.model = "gpt-4o"
+        span.input = {"prompt": "test"}
+        span.output = {"text": "response"}
+        span._finish()
+
+        session._flush()
+
+        self.assertEqual(captured["session_name"], "Manual Session")
+        self.assertEqual(len(captured["spans"]), 1)
+        self.assertEqual(captured["spans"][0]["name"], "manual_op")
+        self.assertIn("started_at", captured["spans"][0])
+        self.assertIn("ended_at", captured["spans"][0])
 
 
 class TestDecorator(unittest.TestCase):
@@ -336,6 +380,413 @@ class TestPayloadFormat(unittest.TestCase):
         serialized = json.dumps(captured, default=str)
         parsed = json.loads(serialized)
         self.assertEqual(parsed["session_name"], "JSON Test")
+
+
+# ── NEW: Retry logic tests ────────────────────────────────────────
+
+
+class TestRetryLogic(unittest.TestCase):
+    """Tests for _http_post retry with exponential backoff."""
+
+    @patch("agentdecode.tracer.urlopen")
+    @patch("agentdecode.tracer.time.sleep")
+    def test_retries_on_failure_then_succeeds(self, mock_sleep, mock_urlopen):
+        """Mock _http_post to fail twice then succeed on third attempt."""
+        from agentdecode.tracer import _http_post
+        from urllib.error import URLError
+
+        # First two calls fail, third succeeds
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"ok": true}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        mock_urlopen.side_effect = [
+            URLError("connection refused"),
+            URLError("connection refused"),
+            mock_response,
+        ]
+
+        result = _http_post(
+            url="http://localhost/api/ingest",
+            api_key="al_test",
+            payload={"session_name": "test", "spans": []},
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(mock_urlopen.call_count, 3)
+        # Should have slept twice (after first and second failure)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch("agentdecode.tracer.urlopen")
+    @patch("agentdecode.tracer.time.sleep")
+    def test_silent_fail_on_decorator(self, mock_sleep, mock_urlopen):
+        """When silent_fail=True, no exception is raised."""
+        from agentdecode.tracer import _http_post
+        from urllib.error import URLError
+
+        mock_urlopen.side_effect = URLError("always fails")
+
+        # Should NOT raise when silent_fail=True
+        result = _http_post(
+            url="http://localhost/api/ingest",
+            api_key="al_test",
+            payload={"session_name": "test", "spans": []},
+            silent_fail=True,
+        )
+
+        self.assertEqual(result, {})
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("agentdecode.tracer.urlopen")
+    @patch("agentdecode.tracer.time.sleep")
+    def test_max_retries_exceeded_raises(self, mock_sleep, mock_urlopen):
+        """When all retries fail and silent_fail=False, exception is raised."""
+        from agentdecode.tracer import _http_post
+        from urllib.error import URLError
+
+        mock_urlopen.side_effect = URLError("always fails")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _http_post(
+                url="http://localhost/api/ingest",
+                api_key="al_test",
+                payload={"session_name": "test", "spans": []},
+                silent_fail=False,
+            )
+
+        self.assertIn("connection error", str(ctx.exception))
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("agentdecode.tracer.urlopen")
+    @patch("agentdecode.tracer.time.sleep")
+    def test_no_retry_on_4xx_client_error(self, mock_sleep, mock_urlopen):
+        """4xx errors (except 429) should NOT be retried."""
+        from agentdecode.tracer import _http_post
+        from urllib.error import HTTPError
+        from io import BytesIO
+
+        error = HTTPError(
+            url="http://localhost",
+            code=400,
+            msg="Bad Request",
+            hdrs={},  # type: ignore
+            fp=BytesIO(b'{"error": "invalid payload"}'),
+        )
+        mock_urlopen.side_effect = error
+
+        with self.assertRaises(RuntimeError):
+            _http_post(
+                url="http://localhost/api/ingest",
+                api_key="al_test",
+                payload={"bad": "data"},
+            )
+
+        # Should NOT retry on 400
+        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertEqual(mock_sleep.call_count, 0)
+
+    @patch("agentdecode.tracer.urlopen")
+    @patch("agentdecode.tracer.time.sleep")
+    def test_backoff_timing(self, mock_sleep, mock_urlopen):
+        """Verify exponential backoff wait times: 0.5s, 1s."""
+        from agentdecode.tracer import _http_post
+        from urllib.error import URLError
+
+        mock_urlopen.side_effect = URLError("fail")
+
+        try:
+            _http_post(
+                url="http://localhost/api/ingest",
+                api_key="al_test",
+                payload={},
+            )
+        except RuntimeError:
+            pass
+
+        # Check backoff: 0.5, 1.0 (no sleep after last attempt)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_any_call(0.5)
+        mock_sleep.assert_any_call(1.0)
+
+
+# ── NEW: Async support tests ──────────────────────────────────────
+
+
+class TestAsyncSupport(unittest.TestCase):
+    """Tests for async @agent.trace() decorator."""
+
+    def test_async_decorator_captures_io(self):
+        """Async decorated function returns correct result and captures IO."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        orig_session = agent.session
+
+        def patched_session(name, session_id=None, *, _send_fn=None):
+            return orig_session(name, session_id, _send_fn=capture)
+
+        agent.session = patched_session
+
+        @agent.trace("async_classify", span_type="llm")
+        async def classify(message: str) -> dict:
+            return {"intent": "support", "confidence": 0.95}
+
+        result = asyncio.run(classify("help me"))
+
+        self.assertEqual(result, {"intent": "support", "confidence": 0.95})
+        self.assertEqual(len(captured["spans"]), 1)
+        self.assertEqual(captured["spans"][0]["name"], "async_classify")
+        self.assertEqual(captured["spans"][0]["span_type"], "llm")
+        self.assertEqual(
+            captured["spans"][0]["output"],
+            {"intent": "support", "confidence": 0.95},
+        )
+
+    def test_async_decorator_captures_exception(self):
+        """Async decorated function that raises: exception propagates AND span captured."""
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        orig_session = agent.session
+
+        def patched_session(name, session_id=None, *, _send_fn=None):
+            return orig_session(name, session_id, _send_fn=capture)
+
+        agent.session = patched_session
+
+        @agent.trace("async_risky", span_type="tool")
+        async def risky_call():
+            raise ConnectionError("API timeout")
+
+        with self.assertRaises(ConnectionError):
+            asyncio.run(risky_call())
+
+        self.assertEqual(captured["spans"][0]["status"], "error")
+        self.assertIn("API timeout", captured["spans"][0]["error_message"])
+
+    def test_async_decorator_preserves_function_name(self):
+        """functools.wraps should preserve the original function name."""
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        @agent.trace("my_func", span_type="llm")
+        async def my_async_function():
+            return "hello"
+
+        self.assertEqual(my_async_function.__name__, "my_async_function")
+
+
+# ── NEW: LangChain handler tests ──────────────────────────────────
+
+
+class TestLangChainHandler(unittest.TestCase):
+    """Tests for the LangChain callback handler."""
+
+    def test_handler_raises_without_langchain(self):
+        """If langchain is not installed, constructor raises ImportError."""
+        # We simulate langchain being unavailable by patching the flag
+        from agentdecode.integrations import langchain as lc_module
+
+        original = lc_module.LANGCHAIN_AVAILABLE
+        lc_module.LANGCHAIN_AVAILABLE = False
+
+        try:
+            agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+            with self.assertRaises(ImportError) as ctx:
+                lc_module.AgentDecodeCallbackHandler(agent)
+            self.assertIn("langchain is not installed", str(ctx.exception))
+        finally:
+            lc_module.LANGCHAIN_AVAILABLE = original
+
+    def test_handler_captures_llm_call(self):
+        """on_llm_start + on_llm_end creates a span with span_type=llm."""
+        from agentdecode.integrations.langchain import (
+            AgentDecodeCallbackHandler,
+            LANGCHAIN_AVAILABLE,
+        )
+
+        if not LANGCHAIN_AVAILABLE:
+            self.skipTest("langchain not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeCallbackHandler(
+            agent, session_name="test_llm", _send_fn=capture
+        )
+
+        # Simulate LLM start
+        handler.on_llm_start(
+            serialized={"name": "gpt-4o"},
+            prompts=["What is 2+2?"],
+            run_id="run-1",
+        )
+
+        # Simulate LLM end with mock response
+        mock_generation = MagicMock()
+        mock_generation.text = "4"
+        mock_response = MagicMock()
+        mock_response.generations = [[mock_generation]]
+        mock_response.llm_output = {
+            "token_usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        }
+
+        handler.on_llm_end(response=mock_response, run_id="run-1")
+
+        # Flush
+        handler.on_agent_finish(finish=None, run_id="run-finish")
+
+        self.assertEqual(captured["session_name"], "test_llm")
+        self.assertEqual(len(captured["spans"]), 1)
+        self.assertEqual(captured["spans"][0]["span_type"], "llm")
+        self.assertEqual(captured["spans"][0]["model"], "gpt-4o")
+        self.assertEqual(captured["spans"][0]["output"], {"text": "4"})
+        self.assertEqual(captured["spans"][0]["input_tokens"], 10)
+        self.assertEqual(captured["spans"][0]["output_tokens"], 5)
+
+    def test_handler_captures_tool_call(self):
+        """on_tool_start + on_tool_end creates a span with span_type=tool."""
+        from agentdecode.integrations.langchain import (
+            AgentDecodeCallbackHandler,
+            LANGCHAIN_AVAILABLE,
+        )
+
+        if not LANGCHAIN_AVAILABLE:
+            self.skipTest("langchain not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeCallbackHandler(
+            agent, session_name="test_tool", _send_fn=capture
+        )
+
+        # Start a chain first to create session
+        handler.on_chain_start(
+            serialized={"name": "my_chain"},
+            inputs={"question": "test"},
+            run_id="chain-1",
+        )
+
+        # Tool call
+        handler.on_tool_start(
+            serialized={"name": "search"},
+            input_str="find docs about refunds",
+            run_id="tool-1",
+        )
+        handler.on_tool_end(output="Found 3 documents", run_id="tool-1")
+
+        # End chain
+        handler.on_chain_end(outputs={"answer": "done"}, run_id="chain-1")
+
+        # Flush
+        handler.on_agent_finish(finish=None, run_id="run-finish")
+
+        self.assertEqual(captured["session_name"], "test_tool")
+        # chain span + tool span = 2
+        self.assertEqual(len(captured["spans"]), 2)
+
+        tool_span = [s for s in captured["spans"] if s["span_type"] == "tool"][0]
+        self.assertEqual(tool_span["name"], "tool.search")
+        self.assertEqual(tool_span["input"], {"input": "find docs about refunds"})
+        self.assertEqual(tool_span["output"], {"output": "Found 3 documents"})
+
+    def test_handler_captures_error(self):
+        """on_llm_error marks span with status=error."""
+        from agentdecode.integrations.langchain import (
+            AgentDecodeCallbackHandler,
+            LANGCHAIN_AVAILABLE,
+        )
+
+        if not LANGCHAIN_AVAILABLE:
+            self.skipTest("langchain not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeCallbackHandler(
+            agent, session_name="test_error", _send_fn=capture
+        )
+
+        handler.on_llm_start(
+            serialized={"name": "gpt-4o"},
+            prompts=["test"],
+            run_id="run-err",
+        )
+        handler.on_llm_error(error=RuntimeError("API key invalid"), run_id="run-err")
+        handler.on_agent_finish(finish=None, run_id="run-finish")
+
+        self.assertEqual(captured["spans"][0]["status"], "error")
+        self.assertIn("API key invalid", captured["spans"][0]["error_message"])
+
+    def test_handler_flushes_on_agent_finish(self):
+        """on_agent_finish calls session._flush()."""
+        from agentdecode.integrations.langchain import (
+            AgentDecodeCallbackHandler,
+            LANGCHAIN_AVAILABLE,
+        )
+
+        if not LANGCHAIN_AVAILABLE:
+            self.skipTest("langchain not installed")
+
+        flush_called = False
+
+        def capture(payload):
+            nonlocal flush_called
+            flush_called = True
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeCallbackHandler(
+            agent, session_name="flush_test", _send_fn=capture
+        )
+
+        # Create session with a span
+        handler.on_llm_start(
+            serialized={"name": "test"},
+            prompts=["hello"],
+            run_id="run-1",
+        )
+        handler.on_llm_end(
+            response=MagicMock(generations=[], llm_output=None),
+            run_id="run-1",
+        )
+
+        self.assertFalse(flush_called)
+
+        handler.on_agent_finish(finish=None, run_id="run-finish")
+
+        self.assertTrue(flush_called)
+
+
+class TestVersion(unittest.TestCase):
+    """Version attribute tests."""
+
+    def test_version_attribute_exists(self):
+        import agentdecode
+
+        self.assertTrue(hasattr(agentdecode, "__version__"))
+        self.assertEqual(agentdecode.__version__, "0.1.2")
 
 
 if __name__ == "__main__":

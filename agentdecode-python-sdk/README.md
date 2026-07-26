@@ -17,7 +17,7 @@ from agentdecode import AgentDecode
 
 agent = AgentDecode(
     api_key="al_your_api_key",
-    endpoint="https://your-app.vercel.app"
+    endpoint="https://agent-decode.vercel.app"
 )
 
 # Use as a context manager to group spans into a session

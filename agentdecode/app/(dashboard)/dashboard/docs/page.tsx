@@ -134,6 +134,53 @@ result = classify("I need help")  # sends a single-span trace`}</code>
         </div>
       </section>
 
+      {/* LangChain Integration */}
+      <section id="langchain" className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">LangChain Integration</h2>
+        </div>
+
+        <div className="p-6 rounded-xl border border-border bg-card space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Install</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto">
+              <code>pip install agentdecode langchain-core</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`from agentdecode import AgentDecode
+from agentdecode.integrations.langchain import AgentDecodeCallbackHandler
+
+agent = AgentDecode(
+    api_key="al_your_key_here",
+    endpoint="https://agent-decode.vercel.app"
+)
+
+handler = AgentDecodeCallbackHandler(agent, session_name="my_chain")
+
+# Drop into any LangChain chain with one line
+chain.invoke(input, config={"callbacks": [handler]})
+
+# Automatically captures: LLM calls, tool invocations,
+# token counts, latency, and errors`}</code>
+            </pre>
+          </div>
+
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-primary">Zero config:</strong> The handler automatically captures chain, LLM, and tool events as spans.
+              Token usage, model names, and errors are extracted automatically. Works with both{" "}
+              <code className="text-xs bg-muted/50 px-1 py-0.5 rounded font-mono">langchain-core</code> and legacy{" "}
+              <code className="text-xs bg-muted/50 px-1 py-0.5 rounded font-mono">langchain</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Raw HTTP Quickstart */}
       <section id="quickstart" className="space-y-4">
         <div className="flex items-center gap-2">
