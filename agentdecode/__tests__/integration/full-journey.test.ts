@@ -48,6 +48,7 @@ let groqCalls: any[] = []
 let alertsCalls: any[] = []
 let geminiCalls: any[] = []
 let spanInsertCounter = 0
+let ingestRateLimiterCheckMock: any
 
 // ── Supabase mock query builder ─────────────────────────────────
 
@@ -165,6 +166,7 @@ beforeEach(() => {
   alertsCalls = []
   geminiCalls = []
   spanInsertCounter = 0
+  ingestRateLimiterCheckMock = vi.fn(() => ({ allowed: true, remaining: 49, retryAfterMs: 0 }))
 
   // Register mocks BEFORE any import
   vi.doMock('@/lib/logger', () => ({
@@ -198,7 +200,7 @@ beforeEach(() => {
 
   vi.doMock('@/lib/rate-limit', () => ({
     ingestRateLimiter: {
-      check: () => ({ allowed: true, remaining: 49, retryAfterMs: 0 }),
+      check: ingestRateLimiterCheckMock,
     },
     getClientIdentifier: () => 'test-client',
     checkRateLimit: () => ({ allowed: true }),
@@ -647,28 +649,7 @@ describe('Full Journey Integration Tests', () => {
 
   // ── Test 14: Rate limit → 429 ─────────────────────────────────
   test('Test 14: Rate limiting returns 429 with Retry-After', async () => {
-    // Must reset modules to override the rate-limit mock from beforeEach
-    vi.resetModules()
-
-    vi.doMock('@/lib/logger', () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }))
-    vi.doMock('@/lib/env', () => ({
-      checkEnv: () => ({ ok: true, missing: [], warnings: [] }),
-    }))
-    vi.doMock('@/lib/rate-limit', () => ({
-      ingestRateLimiter: {
-        check: () => ({ allowed: false, remaining: 0, retryAfterMs: 2000 }),
-      },
-      getClientIdentifier: () => 'test-client',
-    }))
-    vi.doMock('@/lib/groq', () => ({ scoreSpanWithGroq: vi.fn() }))
-    vi.doMock('@/lib/alerts', () => ({ checkAndFireAlerts: vi.fn() }))
-    vi.doMock('@/lib/supabase/server', () => ({
-      createServiceClient: () => ({
-        from: (table: string) => createMockQueryBuilder(table),
-      }),
-    }))
+    ingestRateLimiterCheckMock.mockReturnValueOnce({ allowed: false, remaining: 0, retryAfterMs: 2000 })
 
     const { POST } = await import('@/app/api/ingest/route')
 
