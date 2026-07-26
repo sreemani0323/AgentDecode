@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentdecode"
-version = "0.1.4"
+version = "0.1.5"
 description = "Free, open-source observability for AI agents. Trace LLM calls, catch silent failures, score output quality."
 readme = "README.md"
 requires-python = ">=3.8"

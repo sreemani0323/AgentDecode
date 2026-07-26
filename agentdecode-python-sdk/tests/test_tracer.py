@@ -1095,7 +1095,408 @@ class TestVersion(unittest.TestCase):
         import agentdecode
 
         self.assertTrue(hasattr(agentdecode, "__version__"))
-        self.assertEqual(agentdecode.__version__, "0.1.4")
+        self.assertEqual(agentdecode.__version__, "0.1.5")
+
+
+# ── Anthropic instrumentation tests ───────────────────────────────
+
+
+class TestAnthropicInstrumentation(unittest.TestCase):
+    """Tests for the Anthropic auto-instrumentation."""
+
+    def test_instrument_without_anthropic(self):
+        """If anthropic is not installed, raises ImportError with helpful message."""
+        from agentdecode.integrations import anthropic as anth_module
+
+        original = anth_module.ANTHROPIC_AVAILABLE
+        anth_module.ANTHROPIC_AVAILABLE = False
+
+        try:
+            agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+            with self.assertRaises(ImportError) as ctx:
+                anth_module.AgentDecodeAnthropicInstrumentation(agent)
+            self.assertIn("anthropic is not installed", str(ctx.exception))
+        finally:
+            anth_module.ANTHROPIC_AVAILABLE = original
+
+    def test_instrumentation_creates_span(self):
+        """When anthropic is available and patched, calling create() produces a span."""
+        from agentdecode.integrations.anthropic import ANTHROPIC_AVAILABLE
+
+        if not ANTHROPIC_AVAILABLE:
+            self.skipTest("anthropic not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        # Create a mock Anthropic client
+        mock_client = MagicMock()
+        mock_messages = MagicMock()
+        mock_client.messages = mock_messages
+
+        # Mock the response
+        mock_content_block = MagicMock()
+        mock_content_block.text = "Hello! I'm Claude."
+
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 12
+        mock_usage.output_tokens = 6
+
+        mock_response = MagicMock()
+        mock_response.content = [mock_content_block]
+        mock_response.usage = mock_usage
+
+        original_create = MagicMock(return_value=mock_response)
+        mock_messages.create = original_create
+
+        # Manually create traced_create matching the pattern
+        from agentdecode.tracer import _current_session
+
+        def traced_create(messages_self, *args, **kwargs):
+            session = _current_session.get()
+            if session is None:
+                return original_create(messages_self, *args, **kwargs)
+
+            model = kwargs.get("model", "unknown")
+            messages = kwargs.get("messages", [])
+            span_name = f"anthropic.messages.{model}"
+
+            with session.span(span_name, span_type="llm") as span:
+                span.model = model
+                span.input = {
+                    "messages": [
+                        {"role": m.get("role", "unknown"), "content": str(m.get("content", ""))[:200]}
+                        for m in (messages[-3:] if messages else [])
+                    ]
+                }
+                response = original_create(messages_self, *args, **kwargs)
+                if hasattr(response, "content") and response.content:
+                    text = getattr(response.content[0], "text", None)
+                    if text:
+                        span.output = {"content": text[:500]}
+                if hasattr(response, "usage") and response.usage:
+                    span.input_tokens = response.usage.input_tokens
+                    span.output_tokens = response.usage.output_tokens
+                return response
+
+        mock_messages.create = traced_create
+
+        # Use it inside a session
+        with agent.session("Anthropic Test", _send_fn=capture) as session:
+            mock_messages.create(
+                mock_messages,
+                model="claude-sonnet-4-20250514",
+                messages=[
+                    {"role": "user", "content": "Hello!"},
+                ],
+            )
+
+        spans = captured["spans"]
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0]["span_type"], "llm")
+        self.assertEqual(spans[0]["name"], "anthropic.messages.claude-sonnet-4-20250514")
+        self.assertEqual(spans[0]["model"], "claude-sonnet-4-20250514")
+        self.assertEqual(spans[0]["input_tokens"], 12)
+        self.assertEqual(spans[0]["output_tokens"], 6)
+        self.assertEqual(spans[0]["output"], {"content": "Hello! I'm Claude."})
+
+    def test_cost_estimation_claude_opus(self):
+        """Verify cost is calculated for claude-opus model."""
+        from agentdecode.integrations.anthropic import ANTHROPIC_AVAILABLE
+
+        if not ANTHROPIC_AVAILABLE:
+            self.skipTest("anthropic not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 100
+        mock_usage.output_tokens = 50
+
+        mock_content = MagicMock()
+        mock_content.text = "Response"
+
+        mock_response = MagicMock()
+        mock_response.content = [mock_content]
+        mock_response.usage = mock_usage
+
+        original_create = MagicMock(return_value=mock_response)
+
+        from agentdecode.tracer import _current_session
+
+        def traced_create(messages_self, *args, **kwargs):
+            session = _current_session.get()
+            if session is None:
+                return original_create(messages_self, *args, **kwargs)
+
+            model = kwargs.get("model", "unknown")
+            span_name = f"anthropic.messages.{model}"
+
+            with session.span(span_name, span_type="llm") as span:
+                span.model = model
+                response = original_create(messages_self, *args, **kwargs)
+                if hasattr(response, "usage") and response.usage:
+                    input_tok = response.usage.input_tokens
+                    output_tok = response.usage.output_tokens
+                    span.input_tokens = input_tok
+                    span.output_tokens = output_tok
+                    total = (input_tok or 0) + (output_tok or 0)
+                    if "claude-opus" in model:
+                        span.cost_usd = total * 0.000015
+                return response
+
+        mock_messages = MagicMock()
+        mock_messages.create = traced_create
+
+        with agent.session("Cost Test", _send_fn=capture) as session:
+            mock_messages.create(
+                mock_messages,
+                model="claude-opus-4-5",
+            )
+
+        spans = captured["spans"]
+        # total = 100 + 50 = 150, cost = 150 * 0.000015 = 0.00225
+        self.assertAlmostEqual(spans[0]["cost_usd"], 0.00225)
+
+
+# ── LlamaIndex handler tests ─────────────────────────────────────
+
+
+class TestLlamaIndexHandler(unittest.TestCase):
+    """Tests for the LlamaIndex callback handler."""
+
+    def test_handler_raises_without_llamaindex(self):
+        """If llama-index is not installed, raises ImportError."""
+        from agentdecode.integrations import llamaindex as li_module
+
+        original = li_module.LLAMAINDEX_AVAILABLE
+        li_module.LLAMAINDEX_AVAILABLE = False
+
+        try:
+            agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+            with self.assertRaises(ImportError) as ctx:
+                li_module.AgentDecodeLlamaIndexHandler(agent)
+            self.assertIn("llama-index is not installed", str(ctx.exception))
+        finally:
+            li_module.LLAMAINDEX_AVAILABLE = original
+
+    def test_handler_on_event_start_creates_span(self):
+        """on_event_start creates a span with correct type."""
+        from agentdecode.integrations.llamaindex import (
+            AgentDecodeLlamaIndexHandler,
+            LLAMAINDEX_AVAILABLE,
+        )
+
+        if not LLAMAINDEX_AVAILABLE:
+            self.skipTest("llama-index not installed")
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeLlamaIndexHandler(
+            agent, session_name="li_test", _send_fn=capture
+        )
+
+        # Start a trace (creates session)
+        handler.start_trace(trace_id="test-trace")
+
+        # Create a mock event type
+        from llama_index.core.callbacks import CBEventType
+
+        event_id = handler.on_event_start(
+            event_type=CBEventType.LLM,
+            payload={"prompt": "What is AI?"},
+            event_id="event-1",
+        )
+
+        self.assertEqual(event_id, "event-1")
+        self.assertIn("event-1", handler._event_spans)
+
+        # End event
+        handler.on_event_end(
+            event_type=CBEventType.LLM,
+            payload={"response": "AI is..."},
+            event_id="event-1",
+        )
+
+        # End trace (flushes)
+        handler.end_trace(trace_id="test-trace")
+
+        self.assertEqual(captured["session_name"], "li_test")
+        self.assertEqual(len(captured["spans"]), 1)
+        self.assertEqual(captured["spans"][0]["span_type"], "llm")
+        self.assertEqual(captured["spans"][0]["input"], {"prompt": "What is AI?"})
+        self.assertEqual(captured["spans"][0]["output"], {"response": "AI is..."})
+
+    def test_handler_end_trace_flushes_session(self):
+        """end_trace calls _flush() on the session."""
+        from agentdecode.integrations.llamaindex import (
+            AgentDecodeLlamaIndexHandler,
+            LLAMAINDEX_AVAILABLE,
+        )
+
+        if not LLAMAINDEX_AVAILABLE:
+            self.skipTest("llama-index not installed")
+
+        flush_called = False
+
+        def capture(payload):
+            nonlocal flush_called
+            flush_called = True
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+        handler = AgentDecodeLlamaIndexHandler(
+            agent, session_name="flush_test", _send_fn=capture
+        )
+
+        handler.start_trace()
+
+        from llama_index.core.callbacks import CBEventType
+
+        handler.on_event_start(
+            event_type=CBEventType.QUERY,
+            payload={"query": "test"},
+            event_id="ev-1",
+        )
+        handler.on_event_end(
+            event_type=CBEventType.QUERY,
+            payload={"result": "answer"},
+            event_id="ev-1",
+        )
+
+        self.assertFalse(flush_called)
+
+        handler.end_trace()
+
+        self.assertTrue(flush_called)
+
+
+# ── CrewAI observer tests ────────────────────────────────────────
+
+
+class TestCrewAIObserver(unittest.TestCase):
+    """Tests for the CrewAI observer."""
+
+    def test_observer_raises_without_crewai(self):
+        """If crewai is not installed, run() raises ImportError."""
+        from agentdecode.integrations import crewai as crew_module
+
+        original = crew_module.CREWAI_AVAILABLE
+        crew_module.CREWAI_AVAILABLE = False
+
+        try:
+            agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+            observer = crew_module.AgentDecodeCrewObserver(agent)
+            mock_crew = MagicMock()
+
+            with self.assertRaises(ImportError) as ctx:
+                observer.run(mock_crew)
+            self.assertIn("crewai is not installed", str(ctx.exception))
+        finally:
+            crew_module.CREWAI_AVAILABLE = original
+
+    def test_observer_traces_crew_run(self):
+        """Observer traces crew.kickoff() as a session with correct metadata."""
+        from agentdecode.integrations.crewai import (
+            AgentDecodeCrewObserver,
+            CREWAI_AVAILABLE,
+        )
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        # Mock crewai availability for this test
+        from agentdecode.integrations import crewai as crew_module
+
+        original = crew_module.CREWAI_AVAILABLE
+        crew_module.CREWAI_AVAILABLE = True
+
+        try:
+            observer = AgentDecodeCrewObserver(agent, _send_fn=capture)
+
+            # Mock crew object
+            mock_crew = MagicMock()
+            mock_crew.name = "Research Crew"
+            mock_crew.agents = [MagicMock(), MagicMock(), MagicMock()]
+            mock_crew.tasks = [MagicMock(), MagicMock()]
+            mock_crew.kickoff.return_value = "Final crew output"
+
+            result = observer.run(
+                mock_crew,
+                inputs={"topic": "AI trends"},
+                session_name="test_crew",
+            )
+
+            self.assertEqual(result, "Final crew output")
+            mock_crew.kickoff.assert_called_once_with(inputs={"topic": "AI trends"})
+
+            self.assertEqual(captured["session_name"], "test_crew")
+            self.assertEqual(len(captured["spans"]), 1)
+            self.assertEqual(captured["spans"][0]["name"], "crew.kickoff")
+            self.assertEqual(captured["spans"][0]["span_type"], "agent")
+            self.assertEqual(captured["spans"][0]["input"], {"topic": "AI trends"})
+            self.assertEqual(
+                captured["spans"][0]["output"],
+                {"result": "Final crew output"},
+            )
+            self.assertEqual(captured["spans"][0]["metadata"]["agents"], 3)
+            self.assertEqual(captured["spans"][0]["metadata"]["tasks"], 2)
+        finally:
+            crew_module.CREWAI_AVAILABLE = original
+
+    def test_observer_captures_crew_error(self):
+        """Observer captures errors when crew.kickoff() raises."""
+        from agentdecode.integrations.crewai import AgentDecodeCrewObserver
+        from agentdecode.integrations import crewai as crew_module
+
+        captured = {}
+
+        def capture(payload):
+            captured.update(payload)
+            return {}
+
+        agent = AgentDecode(api_key="al_test", endpoint="http://localhost")
+
+        original = crew_module.CREWAI_AVAILABLE
+        crew_module.CREWAI_AVAILABLE = True
+
+        try:
+            observer = AgentDecodeCrewObserver(agent, _send_fn=capture)
+
+            mock_crew = MagicMock()
+            mock_crew.name = "Failing Crew"
+            mock_crew.agents = []
+            mock_crew.tasks = []
+            mock_crew.kickoff.side_effect = RuntimeError("Agent loop failed")
+
+            with self.assertRaises(RuntimeError):
+                observer.run(mock_crew, inputs={"bad": "input"})
+
+            self.assertEqual(captured["spans"][0]["status"], "error")
+            self.assertIn("Agent loop failed", captured["spans"][0]["error_message"])
+        finally:
+            crew_module.CREWAI_AVAILABLE = original
 
 
 if __name__ == "__main__":

@@ -181,6 +181,140 @@ chain.invoke(input, config={"callbacks": [handler]})
         </div>
       </section>
 
+      {/* Anthropic Integration */}
+      <section id="anthropic" className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">Anthropic Integration</h2>
+        </div>
+
+        <div className="p-6 rounded-xl border border-border bg-card space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Install</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto">
+              <code>pip install agentdecode anthropic</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`from agentdecode import AgentDecode
+from agentdecode.integrations.anthropic import instrument_anthropic
+
+agent = AgentDecode(
+    api_key="al_your_key_here",
+    endpoint="https://agent-decode.vercel.app"
+)
+instrument_anthropic(agent)
+
+# All anthropic calls inside a session are now traced
+client = anthropic.Anthropic()
+with agent.session("My Agent") as session:
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+    # ^ Automatically captured with model, tokens, and cost`}</code>
+            </pre>
+          </div>
+
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-primary">Auto-patching:</strong> Works with all Claude models.
+              Captures input/output tokens and estimates cost per call automatically.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* LlamaIndex Integration */}
+      <section id="llamaindex" className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">LlamaIndex Integration</h2>
+        </div>
+
+        <div className="p-6 rounded-xl border border-border bg-card space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Install</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto">
+              <code>pip install agentdecode llama-index-core</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`from agentdecode import AgentDecode
+from agentdecode.integrations.llamaindex import AgentDecodeLlamaIndexHandler
+from llama_index.core.callbacks import CallbackManager
+
+agent = AgentDecode(
+    api_key="al_your_key_here",
+    endpoint="https://agent-decode.vercel.app"
+)
+handler = AgentDecodeLlamaIndexHandler(agent, session_name="rag_query")
+callback_manager = CallbackManager([handler])
+
+# Pass to your index/query engine
+query_engine = index.as_query_engine(callback_manager=callback_manager)
+response = query_engine.query("What is our refund policy?")
+# Traces: queries, retrievals, LLM calls, embeddings`}</code>
+            </pre>
+          </div>
+
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-primary">Full pipeline visibility:</strong> Captures every event in your RAG pipeline —
+              queries, retrievals, embeddings, LLM calls, and reranking steps.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* CrewAI Integration */}
+      <section id="crewai" className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">CrewAI Integration</h2>
+        </div>
+
+        <div className="p-6 rounded-xl border border-border bg-card space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Install</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto">
+              <code>pip install agentdecode crewai</code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+            <pre className="p-4 rounded-lg bg-background border border-border text-sm font-mono text-foreground overflow-x-auto leading-relaxed">
+              <code>{`from agentdecode import AgentDecode
+from agentdecode.integrations.crewai import AgentDecodeCrewObserver
+
+agent = AgentDecode(
+    api_key="al_your_key_here",
+    endpoint="https://agent-decode.vercel.app"
+)
+observer = AgentDecodeCrewObserver(agent)
+
+# Wrap your crew.kickoff() — traces the full run
+result = observer.run(crew, inputs={"topic": "AI trends"})
+# Captures: agent count, task count, result, errors`}</code>
+            </pre>
+          </div>
+
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-primary">One-line wrapper:</strong> Traces the entire crew execution as a single session.
+              Agent and task counts are captured as metadata automatically.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Raw HTTP Quickstart */}
       <section id="quickstart" className="space-y-4">
         <div className="flex items-center gap-2">

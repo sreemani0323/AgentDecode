@@ -2,7 +2,7 @@
 
 from agentdecode.tracer import AgentDecode, Session, Span, current_session, current_span
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 __all__ = [
     "AgentDecode",
     "Session",

@@ -145,6 +145,64 @@ chain.invoke(input, config={"callbacks": [handler]})
 
 Requires: `pip install agentdecode langchain-core`
 
+## Anthropic Auto-Instrumentation
+
+```python
+from agentdecode import AgentDecode
+from agentdecode.integrations.anthropic import instrument_anthropic
+
+agent = AgentDecode(api_key="al_...", endpoint="https://agent-decode.vercel.app")
+instrument_anthropic(agent)
+
+# All anthropic.Anthropic() calls inside a session are now traced
+import anthropic
+client = anthropic.Anthropic()
+
+with agent.session("My Agent") as session:
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+    # ^ Automatically captured with model, tokens, and cost
+```
+
+Requires: `pip install agentdecode anthropic`
+
+## LlamaIndex Integration
+
+```python
+from agentdecode import AgentDecode
+from agentdecode.integrations.llamaindex import AgentDecodeLlamaIndexHandler
+from llama_index.core.callbacks import CallbackManager
+
+agent = AgentDecode(api_key="al_...", endpoint="https://agent-decode.vercel.app")
+handler = AgentDecodeLlamaIndexHandler(agent, session_name="rag_query")
+callback_manager = CallbackManager([handler])
+
+# Pass to your index/query engine
+query_engine = index.as_query_engine(callback_manager=callback_manager)
+response = query_engine.query("What is our refund policy?")
+# Automatically traces: queries, retrievals, LLM calls, embeddings
+```
+
+Requires: `pip install agentdecode llama-index-core`
+
+## CrewAI Integration
+
+```python
+from agentdecode import AgentDecode
+from agentdecode.integrations.crewai import AgentDecodeCrewObserver
+
+agent = AgentDecode(api_key="al_...", endpoint="https://agent-decode.vercel.app")
+observer = AgentDecodeCrewObserver(agent)
+
+# Wrap your crew.kickoff() — traces the full run as a session
+result = observer.run(crew, inputs={"topic": "AI trends"})
+# Captures: agent count, task count, result, errors
+```
+
+Requires: `pip install agentdecode crewai`
+
 ## Decorator for Simple Tracing
 
 ```python
@@ -237,6 +295,9 @@ Returns the active span in the current context, or `None`.
 - Zero external dependencies (uses only Python stdlib)
 - Optional: `langchain-core` for LangChain integration
 - Optional: `openai` for OpenAI auto-instrumentation
+- Optional: `anthropic` for Anthropic auto-instrumentation
+- Optional: `llama-index-core` for LlamaIndex integration
+- Optional: `crewai` for CrewAI integration
 
 ## License
 

@@ -495,7 +495,7 @@ def _http_post(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "agentdecode-python/0.1.4",
+            "User-Agent": "agentdecode-python/0.1.5",
         },
         method="POST",
     )
