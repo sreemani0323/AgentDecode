@@ -41,8 +41,19 @@ export async function updateSession(request: NextRequest) {
       }
     )
 
-    // refreshing the auth token
-    const { data: { user } } = await supabase.auth.getUser()
+    // Refresh auth token with a hard 5s timeout to prevent hanging
+    // when Supabase is paused/unreachable (avoids Vercel 504)
+    const authTimeout = new Promise<{ data: { user: null } }>((resolve) =>
+      setTimeout(() => {
+        logger.warn('Supabase auth.getUser() timed out after 5s — treating as unauthenticated')
+        resolve({ data: { user: null } })
+      }, 5000)
+    )
+
+    const { data: { user } } = await Promise.race([
+      supabase.auth.getUser(),
+      authTimeout,
+    ])
 
     return { supabase, user, response: supabaseResponse }
   } catch (error) {
