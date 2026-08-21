@@ -1,0 +1,53 @@
+{
+  "name": "@agentdecode/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for AgentDecode — free AI agent observability",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./integrations/openai": {
+      "types": "./dist/integrations/openai.d.ts",
+      "import": "./dist/integrations/openai.mjs",
+      "require": "./dist/integrations/openai.js"
+    },
+    "./integrations/langchain": {
+      "types": "./dist/integrations/langchain.d.ts",
+      "import": "./dist/integrations/langchain.mjs",
+      "require": "./dist/integrations/langchain.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["ai", "agents", "observability", "llm", "tracing", "openai", "langchain"],
+  "author": "AgentDecode",
+  "license": "MIT",
+  "homepage": "https://agent-decode.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sreemani0323/AgentDecode"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "peerDependencies": {
+    "openai": ">=4.0.0",
+    "@langchain/core": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": { "optional": true },
+    "@langchain/core": { "optional": true }
+  }
+}
