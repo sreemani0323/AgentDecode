@@ -190,8 +190,8 @@ export async function GET(
 
     // Fetch eval_scores and ai_explanations separately for robust compatibility
     // with unpartitioned identity ledger and trace_evaluations
-    let evalScoresMap = new Map<string, EvalScore>();
-    let explanationsMap = new Map<string, AiExplanation>();
+    const evalScoresMap = new Map<string, EvalScore>();
+    const explanationsMap = new Map<string, AiExplanation>();
 
     if (spanIds.length > 0) {
       const [evalRes, explRes, traceEvalRes] = await Promise.all([

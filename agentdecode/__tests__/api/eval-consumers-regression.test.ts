@@ -28,7 +28,7 @@ let mockDb: {
 }
 
 function createQueryBuilder(table: string) {
-  let filters: Array<{ col: string; op: string; val: any }> = []
+  const filters: Array<{ col: string; op: string; val: any }> = []
   let selectCols = '*'
   let orderCol: string | null = null
   let orderAsc = true
