@@ -1,14 +1,31 @@
 import { NextResponse } from 'next/server'
+import crypto from 'crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { hashApiKey } from '@/lib/utils'
-import { scoreSpanWithGroq } from '@/lib/groq'
 import { checkAndFireAlerts } from '@/lib/alerts'
 import { ingestRateLimiter, getClientIdentifier } from '@/lib/rate-limit'
 import { checkEnv } from '@/lib/env'
 import { validateIngestPayload } from '@/lib/validation'
 
 export async function POST(request: Request) {
-  // 0. Check critical env vars
+  // 0. Check maintenance admission gate
+  if (process.env.GATEWAY_WRITE_MAINTENANCE === 'true') {
+    return NextResponse.json(
+      {
+        error: 'MAINTENANCE_IN_PROGRESS',
+        message: 'Database migration or maintenance in progress; retain telemetry in client buffer',
+        retryable: true,
+      },
+      {
+        status: 503,
+        headers: {
+          'Retry-After': '30',
+        },
+      }
+    )
+  }
+
+  // 0.1 Check critical env vars
   const envCheck = checkEnv()
   if (!envCheck.ok) {
     const missingKeys = envCheck.missing.map(m => m.key).join(', ')
@@ -149,27 +166,22 @@ export async function POST(request: Request) {
       return 0
     })
 
-    // Track mapping from client_span_id → DB UUID
-    const clientToDbId = new Map<string, string>()
-    const spanIds: string[] = []
-    const spansToInsert: any[] = []
-
-    for (const span of sortedSpans) {
+    const preparedSpans = sortedSpans.map((span: any) => {
       let durationMs = span.duration_ms
       if (!durationMs && span.started_at && span.ended_at) {
         durationMs = new Date(span.ended_at).getTime() - new Date(span.started_at).getTime()
       }
+      const isLegacy = span.is_legacy ?? (!span.trace_id || span.trace_id.startsWith('legacy_'))
+      const traceId = span.trace_id || `legacy_${sessionId.replace(/-/g, '')}`
+      const spanId = span.span_id || `legacy_${crypto.randomUUID().replace(/-/g, '')}`
 
-      // Resolve parent_span_id: prefer direct DB UUID, then look up from client mapping
-      let resolvedParentId = span.parent_span_id || null
-      if (!resolvedParentId && span.parent_client_span_id) {
-        resolvedParentId = clientToDbId.get(span.parent_client_span_id) || null
-      }
-
-      const spanRow = {
+      return {
         session_id: sessionId,
         project_id: projectId,
-        parent_span_id: resolvedParentId,
+        parent_span_id: span.parent_span_id || null,
+        parent_span_id_hex: span.parent_span_id_hex || null,
+        parent_client_span_id: span.parent_client_span_id || null,
+        client_span_id: span.client_span_id || null,
         name: span.name,
         span_type: span.span_type || 'chain',
         status: span.status || 'ok',
@@ -184,32 +196,112 @@ export async function POST(request: Request) {
         output_tokens: span.output_tokens || null,
         cost_usd: span.cost_usd || null,
         metadata: span.metadata || {},
+        trace_id: traceId,
+        span_id: spanId,
+        is_legacy: isLegacy,
+        attributes: span.attributes || {},
+        links: span.links || [],
+        workflow_step: span.workflow_step || null,
+        iteration_index: span.iteration_index || null,
       }
+    })
 
-      const { data: inserted, error: insertErr } = await supabase
-        .from('spans')
-        .insert(spanRow)
-        .select('id')
-        .single()
+    let spanIds: string[] = []
+    let spansToInsert: any[] = []
 
-      if (insertErr || !inserted) {
-        return NextResponse.json({ error: 'Failed to insert span: ' + (insertErr?.message || 'unknown') }, { status: 500 })
-      }
-
-      const dbId = inserted.id
-      spanIds.push(dbId)
-      spansToInsert.push(spanRow)
-
-      // Record mapping for children to reference
-      if (span.client_span_id) {
-        clientToDbId.set(span.client_span_id, dbId)
+    // Attempt single-transaction batch RPC if supported
+    let usedRpc = false
+    if (typeof (supabase as any).rpc === 'function') {
+      try {
+        const { data: rpcSpans, error: rpcErr } = await (supabase as any).rpc('ingest_spans_batch_transactional', {
+          p_project_id: projectId,
+          p_session_id: sessionId,
+          p_spans: preparedSpans,
+        })
+        if (!rpcErr && Array.isArray(rpcSpans) && rpcSpans.length > 0) {
+          spanIds = rpcSpans.map((r: any) => r.out_db_id || r.db_id)
+          spansToInsert = preparedSpans
+          usedRpc = true
+        }
+      } catch {
+        // Fall back to table operations
       }
     }
 
-    // Fire-and-forget: Score LLM spans with Groq
-    for (let i = 0; i < spansToInsert.length; i++) {
-      if (spansToInsert[i].span_type === 'llm') {
-        scoreSpanWithGroq(spanIds[i], spansToInsert[i].input, spansToInsert[i].output).catch(() => {})
+    if (!usedRpc) {
+      // Fallback path (e.g. mock test environment)
+      const clientToDbId = new Map<string, string>()
+      for (const span of preparedSpans) {
+        let resolvedParentId = span.parent_span_id || null
+        if (!resolvedParentId && span.parent_client_span_id) {
+          resolvedParentId = clientToDbId.get(span.parent_client_span_id) || null
+        }
+
+        const spanRow = {
+          session_id: sessionId,
+          project_id: projectId,
+          parent_span_id: resolvedParentId,
+          name: span.name,
+          span_type: span.span_type,
+          status: span.status,
+          started_at: span.started_at,
+          ended_at: span.ended_at,
+          duration_ms: span.duration_ms,
+          model: span.model,
+          input: span.input,
+          output: span.output,
+          error_message: span.error_message,
+          input_tokens: span.input_tokens,
+          output_tokens: span.output_tokens,
+          cost_usd: span.cost_usd,
+          metadata: span.metadata,
+        }
+
+        const { data: inserted, error: insertErr } = await supabase
+          .from('spans')
+          .insert(spanRow)
+          .select('id')
+          .single()
+
+        if (insertErr || !inserted) {
+          return NextResponse.json({ error: 'Failed to insert span: ' + (insertErr?.message || 'unknown') }, { status: 500 })
+        }
+
+        const dbId = inserted.id
+        spanIds.push(dbId)
+        spansToInsert.push(spanRow)
+
+        if (span.client_span_id) {
+          clientToDbId.set(span.client_span_id, dbId)
+        }
+      }
+
+      // Schedule evaluations via transactional outbox
+      for (let i = 0; i < spansToInsert.length; i++) {
+        if (spansToInsert[i].span_type === 'llm') {
+          const traceId = spansToInsert[i].trace_id || `legacy_${sessionId.replace(/-/g, '')}`
+          Promise.resolve(
+            supabase
+              .from('evaluation_outbox')
+              .upsert(
+                {
+                  project_id: projectId,
+                  trace_id: traceId,
+                  eval_type: 'span_score',
+                  trace_version: 1,
+                  status: 'pending',
+                  scheduled_at: new Date(Date.now() + 15000).toISOString(),
+                  payload: {
+                    span_id: spanIds[i],
+                    input: spansToInsert[i].input,
+                    output: spansToInsert[i].output,
+                  },
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'project_id,trace_id,eval_type' }
+              )
+          ).catch(() => {})
+        }
       }
     }
 

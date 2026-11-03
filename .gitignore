@@ -8,6 +8,8 @@ node_modules/
 coverage/
 .pytest_cache/
 .htmlcov/
+playwright-report/
+test-results/
 
 # Next.js Build
 .next/
@@ -48,5 +50,6 @@ ENV/
 # Workspace & Agent metadata
 .agents/
 skills-lock.json
-cd
-
+fresh_test_env/
+*.dump
+.gemini/

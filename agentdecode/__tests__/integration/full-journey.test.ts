@@ -8,6 +8,7 @@
  */
 
 import { describe, test, expect, vi, beforeEach } from 'vitest'
+import { aiRateLimiter, ingestRateLimiter } from '@/lib/rate-limit'
 
 // Pre-computed SHA-256 hash of 'al_sk_test_key_12345'
 const TEST_API_KEY = 'al_sk_test_key_12345'
@@ -17,6 +18,8 @@ const TEST_KEY_HASH = 'c12fed9280137a8e2d82d27312f0b766c7d45fedb8f3a3f899ba0dfa5
 let mockDbState: Record<string, any[]>
 
 function resetDb() {
+  aiRateLimiter.reset()
+  ingestRateLimiter.reset()
   mockDbState = {
     api_keys: [{
       id: 'key-1',

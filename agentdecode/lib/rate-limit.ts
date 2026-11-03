@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server'
 
 /**
  * In-memory Token Bucket Rate Limiter
- * 
+ *
  * Provides basic protection against API abuse without external dependencies.
  * Resets on serverless cold starts, which is acceptable for our use case.
- * 
+ *
  * Each unique identifier (IP or API key) gets its own token bucket.
  * Tokens refill at a steady rate. Each request consumes one token.
  */
@@ -86,6 +86,13 @@ export class RateLimiter {
       remaining: 0,
       retryAfterMs,
     }
+  }
+
+  /**
+   * Reset all buckets (for test isolation).
+   */
+  reset() {
+    this.buckets.clear()
   }
 
   /**

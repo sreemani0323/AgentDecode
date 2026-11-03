@@ -74,6 +74,13 @@ export interface Span {
   cost_usd: number | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  trace_id?: string;
+  span_id?: string;
+  is_legacy?: boolean;
+  attributes?: Record<string, unknown>;
+  links?: Array<Record<string, unknown>>;
+  workflow_step?: number | null;
+  iteration_index?: number | null;
 }
 
 export interface EvalScore {
@@ -175,4 +182,65 @@ export interface IngestSpanPayload {
 export interface IngestResponse {
   session_id: string;
   span_ids: string[];
+}
+
+export interface SpanIdentity {
+  project_id: string;
+  trace_id: string;
+  span_id: string;
+  db_id: string;
+  first_started_at: string;
+  created_at: string;
+}
+
+export interface PendingParentResolution {
+  id: string;
+  project_id: string;
+  trace_id: string;
+  parent_span_id_hex: string;
+  child_span_id: string;
+  child_started_at: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface EvaluationOutbox {
+  id: string;
+  project_id: string;
+  trace_id: string;
+  eval_type: 'hallucination' | 'llm_judge' | 'latency' | 'safety' | 'span_score';
+  trace_version: number;
+  status: 'pending' | 'running' | 'completed' | 'reopened' | 'failed';
+  scheduled_at: string;
+  claimed_by: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  retry_count: number;
+  max_retries: number;
+  last_error: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TraceEvaluation {
+  id: string;
+  project_id: string;
+  trace_id: string;
+  eval_type: string;
+  trace_version: number;
+  score: number;
+  reasoning: string | null;
+  flagged: boolean;
+  metadata: Record<string, unknown>;
+  generated_at: string;
+}
+
+export interface IngestionBatchCheckpoint {
+  project_id: string;
+  batch_id: string;
+  batch_digest: string;
+  expected_count: number;
+  persisted_count: number;
+  committed_at: string;
 }

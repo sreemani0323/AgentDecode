@@ -1,19 +1,60 @@
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
+// OpenTelemetry / W3C Validation Constants & Helpers
+// ---------------------------------------------------------------------------
+
+export const W3C_TRACE_ID_REGEX = /^[0-9a-f]{32}$/
+export const W3C_SPAN_ID_REGEX = /^[0-9a-f]{16}$/
+export const ALL_ZEROS_TRACE_ID = '00000000000000000000000000000000'
+export const ALL_ZEROS_SPAN_ID = '0000000000000000'
+
+// ---------------------------------------------------------------------------
 // Span schema
 // ---------------------------------------------------------------------------
 
-const SpanSchema = z.object({
+export const SpanSchema = z.object({
   name: z.string().min(1, 'Span name is required'),
   span_type: z.enum(['llm', 'tool', 'chain', 'retrieval', 'agent', 'embedding', 'rerank', 'guardrail', 'other']).default('chain'),
   status: z.enum(['ok', 'error']).default('ok'),
   started_at: z.string().datetime({ message: 'started_at must be ISO 8601' }),
   ended_at: z.string().datetime({ message: 'ended_at must be ISO 8601' }).optional().nullable(),
   duration_ms: z.number().nonnegative().optional().nullable(),
+
+  // Database internal parent UUID
   parent_span_id: z.string().uuid().optional().nullable(),
+
+  // Client mapping IDs (for in-batch nesting)
   client_span_id: z.string().min(1).optional().nullable(),
   parent_client_span_id: z.string().min(1).optional().nullable(),
+
+  // OpenTelemetry Canonical Identifiers
+  trace_id: z.string().min(1).optional().nullable()
+    .refine((val) => {
+      if (!val) return true
+      if (val.startsWith('legacy_')) return true
+      return W3C_TRACE_ID_REGEX.test(val) && val !== ALL_ZEROS_TRACE_ID
+    }, { message: 'trace_id must be a valid 32-hex W3C TraceId (non-zero) or legacy key' }),
+
+  span_id: z.string().min(1).optional().nullable()
+    .refine((val) => {
+      if (!val) return true
+      if (val.startsWith('legacy_')) return true
+      return W3C_SPAN_ID_REGEX.test(val) && val !== ALL_ZEROS_SPAN_ID
+    }, { message: 'span_id must be a valid 16-hex W3C SpanId (non-zero) or legacy key' }),
+
+  parent_span_id_hex: z.string().min(1).optional().nullable()
+    .refine((val) => {
+      if (!val) return true
+      return W3C_SPAN_ID_REGEX.test(val) && val !== ALL_ZEROS_SPAN_ID
+    }, { message: 'parent_span_id_hex must be a valid 16-hex W3C parent SpanId' }),
+
+  is_legacy: z.boolean().optional().default(false),
+  attributes: z.record(z.string(), z.unknown()).optional().default({}),
+  links: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  workflow_step: z.number().int().optional().nullable(),
+  iteration_index: z.number().int().optional().nullable(),
+
   model: z.string().optional().nullable(),
   input: z.unknown().optional().nullable(),
   output: z.unknown().optional().nullable(),
@@ -31,6 +72,8 @@ const SpanSchema = z.object({
 export const IngestPayloadSchema = z.object({
   session_id: z.string().min(1).optional(),
   session_name: z.string().min(1).max(200).optional(),
+  batch_id: z.string().uuid().optional(),
+  traceparent: z.string().optional(),
   spans: z
     .array(SpanSchema)
     .min(1, 'spans array must contain at least one span')
@@ -58,22 +101,21 @@ export function validateIngestPayload(data: unknown): {
 } | {
   success: false
   error: string
-  details: Array<{ path: string; message: string }>
+  details: z.ZodIssue[]
 } {
   const result = IngestPayloadSchema.safeParse(data)
-
   if (result.success) {
     return { success: true, data: result.data }
   }
 
-  const details = result.error.issues.map((issue) => ({
-    path: issue.path.join('.'),
-    message: issue.message,
-  }))
+  const firstError = result.error.issues[0]
+  const message = firstError
+    ? `Validation failed: ${firstError.path.join('.')}: ${firstError.message}`
+    : 'Validation failed'
 
   return {
     success: false,
-    error: `Validation failed: ${details.map((d) => d.message).join('; ')}`,
-    details,
+    error: message,
+    details: result.error.issues,
   }
 }

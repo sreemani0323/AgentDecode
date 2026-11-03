@@ -170,27 +170,10 @@ export async function GET(
       );
     }
 
-    // Fetch all spans for this session, joining eval_scores and ai_explanations
-    const { data: spans, error: spansError } = await supabase
+    // Fetch all spans for this session
+    const { data: rawSpans, error: spansError } = await supabase
       .from("spans")
-      .select(
-        `
-        *,
-        eval_scores (
-          span_id,
-          score,
-          reasoning,
-          flagged,
-          generated_at
-        ),
-        ai_explanations (
-          span_id,
-          diagnosis,
-          suggested_fix,
-          generated_at
-        )
-      `
-      )
+      .select("*")
       .eq("session_id", sessionId)
       .order("started_at", { ascending: true });
 
@@ -202,8 +185,72 @@ export async function GET(
       );
     }
 
+    const spansList = rawSpans || [];
+    const spanIds = spansList.map((s: any) => s.id);
+
+    // Fetch eval_scores and ai_explanations separately for robust compatibility
+    // with unpartitioned identity ledger and trace_evaluations
+    let evalScoresMap = new Map<string, EvalScore>();
+    let explanationsMap = new Map<string, AiExplanation>();
+
+    if (spanIds.length > 0) {
+      const [evalRes, explRes, traceEvalRes] = await Promise.all([
+        supabase
+          .from("eval_scores")
+          .select("span_id, score, reasoning, flagged, generated_at")
+          .in("span_id", spanIds),
+        supabase
+          .from("ai_explanations")
+          .select("span_id, diagnosis, suggested_fix, generated_at")
+          .in("span_id", spanIds),
+        supabase
+          .from("trace_evaluations")
+          .select("trace_id, score, reasoning, flagged, generated_at")
+          .eq("project_id", session.project_id),
+      ]);
+
+      if (evalRes.data) {
+        for (const item of evalRes.data) {
+          evalScoresMap.set(item.span_id, item);
+        }
+      }
+
+      if (explRes.data) {
+        for (const item of explRes.data) {
+          explanationsMap.set(item.span_id, item);
+        }
+      }
+
+      // Fallback: if trace_evaluations exists but span has no eval_scores row, synthesize from trace_evaluations
+      if (traceEvalRes.data && traceEvalRes.data.length > 0) {
+        const traceEvalMap = new Map<string, any>();
+        for (const te of traceEvalRes.data) {
+          traceEvalMap.set(te.trace_id, te);
+        }
+
+        for (const span of spansList) {
+          if (!evalScoresMap.has(span.id) && span.trace_id && traceEvalMap.has(span.trace_id)) {
+            const te = traceEvalMap.get(span.trace_id);
+            evalScoresMap.set(span.id, {
+              span_id: span.id,
+              score: te.score,
+              reasoning: te.reasoning,
+              flagged: te.flagged,
+              generated_at: te.generated_at,
+            });
+          }
+        }
+      }
+    }
+
+    const decoratedSpans: SpanRow[] = spansList.map((s: any) => ({
+      ...s,
+      eval_scores: evalScoresMap.get(s.id) || null,
+      ai_explanations: explanationsMap.get(s.id) || null,
+    }));
+
     // Build the nested span tree
-    const spanTree = buildSpanTree((spans as SpanRow[]) || []);
+    const spanTree = buildSpanTree(decoratedSpans);
 
     return NextResponse.json(
       {
