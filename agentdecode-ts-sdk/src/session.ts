@@ -1,4 +1,5 @@
 import { Span, SpanData, SpanType } from './span.js'
+import { IWalStorage } from './wal/types.js'
 
 export interface SessionOptions {
   sessionId?: string
@@ -7,6 +8,7 @@ export interface SessionOptions {
   endpoint: string
   timeout: number
   maxRetries: number
+  wal?: IWalStorage
 }
 
 /**
@@ -52,13 +54,65 @@ export class Session {
   async flush(): Promise<void> {
     if (this._spans.length === 0) return
 
+    const spansToSend = [...this._spans]
+    this._spans = []
+
     const payload = {
       session_id: this._options.sessionId,
       session_name: this._options.sessionName,
-      spans: this._spans,
+      spans: spansToSend,
     }
 
-    await this._sendWithRetry(payload)
+    // Persist to WAL before attempting transmission
+    let batchId: string | undefined
+    if (this._options.wal) {
+      batchId = await this._options.wal.enqueue(
+        payload,
+        this._options.sessionName,
+        this._options.sessionId,
+      )
+    }
+
+    try {
+      await this._sendWithRetry(payload)
+      // Confirmed server acceptance: acknowledge and delete from WAL
+      if (batchId && this._options.wal) {
+        await this._options.wal.acknowledge(batchId)
+      }
+    } catch (error: any) {
+      if (batchId && this._options.wal) {
+        if (this._isClientError(error)) {
+          await this._options.wal.recordPermanentFailure(
+            batchId,
+            error.message || String(error),
+          )
+        } else {
+          await this._options.wal.recordRetry(
+            batchId,
+            error.message || String(error),
+          )
+        }
+      }
+      throw error
+    }
+  }
+
+  private _isClientError(error: unknown): boolean {
+    if (error && typeof error === 'object') {
+      if ((error as any).isClientError) return true
+      if (typeof (error as any).status === 'number') {
+        const s = (error as any).status
+        return s >= 400 && s < 500 && s !== 429
+      }
+      if (
+        typeof (error as any).message === 'string' &&
+        (error as any).message.includes('AgentDecode API error 4') &&
+        !(error as any).message.includes('429')
+      ) {
+        return true
+      }
+    }
+    return false
   }
 
   private async _sendWithRetry(payload: unknown): Promise<void> {
@@ -96,11 +150,16 @@ export class Session {
               response.status < 500 &&
               response.status !== 429
             ) {
-              throw new Error(
+              const err = new Error(
                 `AgentDecode API error ${response.status}: ${body}`,
               )
+              ;(err as any).status = response.status
+              ;(err as any).isClientError = true
+              throw err
             }
-            throw new Error(`HTTP ${response.status}: ${body}`)
+            const err = new Error(`HTTP ${response.status}: ${body}`)
+            ;(err as any).status = response.status
+            throw err
           }
 
           return // success
@@ -111,13 +170,18 @@ export class Session {
         lastError =
           error instanceof Error ? error : new Error(String(error))
         // Don't retry on 4xx (the error message pattern)
-        if (lastError.message.includes('AgentDecode API error 4')) {
+        if (
+          lastError.message.includes('AgentDecode API error 4') &&
+          !lastError.message.includes('429')
+        ) {
           throw lastError
         }
         if (attempt < this._options.maxRetries - 1) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.pow(2, attempt) * 500),
+          const backoff = Math.min(
+            10000,
+            Math.pow(2, attempt) * 500 * (0.8 + 0.4 * Math.random()),
           )
+          await new Promise((resolve) => setTimeout(resolve, backoff))
         }
       }
     }
