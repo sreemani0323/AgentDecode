@@ -16,6 +16,7 @@ import contextvars
 import functools
 import inspect
 import json
+import random
 import sys
 import threading
 import time
@@ -25,6 +26,16 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from agentdecode.wal import SQLiteWAL, WALBatch, WALCapacityError
+
+
+class HTTPClientError(RuntimeError):
+    """Permanent 4xx client error (excluding 429)."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(f"AgentDecode API client error {code}: {message}")
+        self.code = code
 
 
 # ── Context variables for automatic span nesting ───────────────────────
@@ -181,6 +192,7 @@ class Session:
         max_retries: int = 3,
         flush_timeout: int = 30,
         _send_fn: Optional[Callable[..., Any]] = None,
+        wal: Optional[SQLiteWAL] = None,
     ) -> None:
         self.name = name
         self.session_id = session_id
@@ -191,6 +203,7 @@ class Session:
         self._flush_timeout = flush_timeout
         self._spans: List[Span] = []
         self._send_fn = _send_fn  # injectable for testing
+        self._wal = wal
         self._context_token: Optional[contextvars.Token] = None
 
     # ── Span factory ───────────────────────────────────────────────
@@ -265,15 +278,41 @@ class Session:
         if self.session_id:
             payload["session_id"] = self.session_id
 
+        # Persist to WAL before attempting transmission if WAL is active
+        batch_id: Optional[str] = None
+        if self._wal is not None:
+            try:
+                batch_id = self._wal.enqueue(
+                    payload=payload,
+                    session_name=self.name,
+                    session_id=self.session_id,
+                )
+            except WALCapacityError as e:
+                if silent_fail:
+                    print(f"[agentdecode] Warning: {e}", file=sys.stderr)
+                    return {}
+                raise
+
         if self._send_fn is not None:
-            return self._send_fn(payload)
+            try:
+                res = self._send_fn(payload)
+                if batch_id and self._wal is not None:
+                    self._wal.acknowledge(batch_id)
+                return res if res is not None else {}
+            except Exception as e:
+                if batch_id and self._wal is not None:
+                    self._wal.record_retry(batch_id, str(e))
+                if not silent_fail:
+                    raise
+                return {}
 
         # Use threading to enforce flush_timeout across all retries
         result: Dict[str, Any] = {}
         error: Optional[Exception] = None
+        is_client_error = False
 
         def _do_send():
-            nonlocal result, error
+            nonlocal result, error, is_client_error
             try:
                 result = _http_post(
                     url=f"{self._endpoint}/api/ingest",
@@ -281,8 +320,12 @@ class Session:
                     payload=payload,
                     max_retries=self._max_retries,
                     timeout=self._timeout,
-                    silent_fail=silent_fail,
+                    silent_fail=False,
+                    jitter=True,
                 )
+            except HTTPClientError as e:
+                is_client_error = True
+                error = e
             except Exception as e:
                 error = e
 
@@ -291,16 +334,34 @@ class Session:
         thread.join(timeout=self._flush_timeout)
 
         if thread.is_alive():
-            # Flush timed out — the thread is still running but we give up
+            # Flush timed out — trace safely retained in WAL
+            msg = f"flush timed out after {self._flush_timeout}s"
+            if batch_id and self._wal is not None:
+                self._wal.record_retry(batch_id, msg)
             print(
                 f"[agentdecode] Warning: flush timed out after "
-                f"{self._flush_timeout}s — trace may be lost",
+                f"{self._flush_timeout}s — trace persisted in WAL for retry",
                 file=sys.stderr,
             )
             return {}
 
         if error is not None:
+            if batch_id and self._wal is not None:
+                if is_client_error:
+                    self._wal.record_permanent_failure(batch_id, str(error))
+                else:
+                    self._wal.record_retry(batch_id, str(error))
+            if silent_fail:
+                print(
+                    f"[agentdecode] Warning: failed to send trace: {error}",
+                    file=sys.stderr,
+                )
+                return {}
             raise error
+
+        # Confirmed successful delivery: acknowledge and delete from WAL
+        if batch_id and self._wal is not None:
+            self._wal.acknowledge(batch_id)
 
         return result
 
@@ -327,6 +388,11 @@ class AgentDecode:
         timeout: int = 10,
         max_retries: int = 3,
         flush_timeout: int = 30,
+        wal_path: Optional[str] = None,
+        max_wal_entries: int = 10000,
+        max_wal_bytes: int = 50 * 1024 * 1024,
+        wal_synchronous_mode: str = "FULL",
+        disable_wal: bool = False,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -337,6 +403,18 @@ class AgentDecode:
         self.timeout = timeout
         self.max_retries = max_retries
         self.flush_timeout = flush_timeout
+        self.disable_wal = disable_wal
+
+        self.wal: Optional[SQLiteWAL] = None
+        if not disable_wal:
+            self.wal = SQLiteWAL(
+                db_path=wal_path,
+                max_entries=max_wal_entries,
+                max_bytes=max_wal_bytes,
+                synchronous_mode=wal_synchronous_mode,
+            )
+            # Recover pending spans left in-flight from previous crashes/restarts
+            self.wal.recover()
 
     def session(
         self,
@@ -355,6 +433,7 @@ class AgentDecode:
             max_retries=self.max_retries,
             flush_timeout=self.flush_timeout,
             _send_fn=_send_fn,
+            wal=self.wal,
         )
 
     def _start_session(
@@ -378,7 +457,64 @@ class AgentDecode:
             max_retries=self.max_retries,
             flush_timeout=self.flush_timeout,
             _send_fn=_send_fn,
+            wal=self.wal,
         )
+
+    def flush(
+        self,
+        send_fn: Optional[Callable[..., Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> int:
+        """Flush pending WAL records to the ingest endpoint.
+
+        Args:
+            send_fn: Optional custom sender (e.g. for testing).
+            timeout: Optional maximum seconds to attempt sending.
+
+        Returns:
+            Number of successfully acknowledged batches.
+        """
+        if self.wal is None:
+            return 0
+
+        pending = self.wal.get_pending()
+        if not pending:
+            return 0
+
+        batch_ids = [b.id for b in pending]
+        self.wal.mark_sending(batch_ids)
+
+        acked_count = 0
+        start_time = time.time()
+
+        for batch in pending:
+            if timeout is not None and (time.time() - start_time) >= timeout:
+                remaining_ids = [b.id for b in pending[acked_count:]]
+                for rid in remaining_ids:
+                    self.wal.record_retry(rid, "Flush timeout reached")
+                break
+
+            try:
+                if send_fn is not None:
+                    send_fn(batch.payload)
+                else:
+                    _http_post(
+                        url=f"{self.endpoint}/api/ingest",
+                        api_key=self.api_key,
+                        payload=batch.payload,
+                        max_retries=self.max_retries,
+                        timeout=self.timeout,
+                        silent_fail=False,
+                        jitter=True,
+                    )
+                self.wal.acknowledge(batch.id)
+                acked_count += 1
+            except HTTPClientError as e:
+                self.wal.record_permanent_failure(batch.id, str(e))
+            except Exception as e:
+                self.wal.record_retry(batch.id, str(e))
+
+        return acked_count
 
     def trace(
         self,
@@ -471,6 +607,7 @@ def _http_post(
     max_retries: int = 3,
     timeout: int = 10,
     silent_fail: bool = False,
+    jitter: bool = False,
 ) -> Dict[str, Any]:
     """POST JSON to a URL with retry and exponential backoff.
 
@@ -480,9 +617,8 @@ def _http_post(
         payload: JSON-serializable dict to send.
         max_retries: Number of attempts before giving up (default 3).
         timeout: HTTP timeout per request in seconds (default 10).
-        silent_fail: If True, print a warning instead of raising on
-            total failure. Used by the @trace decorator so user code
-            is never crashed by telemetry errors.
+        silent_fail: If True, print a warning instead of raising on total failure.
+        jitter: If True, apply full randomized jitter to backoff delay.
 
     Returns:
         Parsed JSON response body as a dict.
@@ -513,12 +649,12 @@ def _http_post(
                 err_body = e.read().decode("utf-8")
             except Exception:
                 pass
+            if 400 <= e.code < 500 and e.code != 429:
+                last_error = HTTPClientError(e.code, err_body or e.reason)
+                break
             last_error = RuntimeError(
                 f"AgentDecode API error {e.code}: {err_body or e.reason}"
             )
-            # Don't retry on 4xx client errors (except 429 rate limit)
-            if 400 <= e.code < 500 and e.code != 429:
-                break
         except URLError as e:
             last_error = RuntimeError(
                 f"AgentDecode connection error: {e.reason}"
@@ -528,9 +664,13 @@ def _http_post(
                 f"AgentDecode unexpected error: {e}"
             )
 
-        # Exponential backoff: 0.5s, 1s, 2s
+        # Exponential backoff: base 0.5s with optional jitter
         if attempt < max_retries - 1:
-            wait = (2 ** attempt) * 0.5
+            backoff = min(10.0, (2 ** attempt) * 0.5)
+            if jitter:
+                wait = backoff * (0.8 + 0.4 * random.random())
+            else:
+                wait = backoff
             time.sleep(wait)
 
     # All retries exhausted
