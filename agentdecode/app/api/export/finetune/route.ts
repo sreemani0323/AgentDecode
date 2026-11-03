@@ -50,29 +50,46 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Project not found or access denied' }, { status: 404 })
   }
 
-  // Fetch all LLM spans with high eval scores
-  // Join spans with eval_scores where score >= min_score
-  const { data: spans, error } = await supabase
-    .from('spans')
-    .select(`
-      id,
-      name,
-      model,
-      input,
-      output,
-      eval_scores!inner (
-        score,
-        reasoning
-      )
-    `)
-    .eq('project_id', projectId)
-    .eq('span_type', 'llm')
-    .gte('eval_scores.score', minScore)
-    .order('created_at', { ascending: true })
+  // Fetch all LLM spans with high eval scores from eval_scores or trace_evaluations
+  const [evalScoresRes, traceEvalsRes, spansRes] = await Promise.all([
+    supabase
+      .from('eval_scores')
+      .select('span_id, score, reasoning')
+      .gte('score', minScore),
+    supabase
+      .from('trace_evaluations')
+      .select('trace_id, score, reasoning')
+      .eq('project_id', projectId)
+      .gte('score', minScore),
+    supabase
+      .from('spans')
+      .select('id, name, model, input, output, trace_id, created_at')
+      .eq('project_id', projectId)
+      .eq('span_type', 'llm')
+      .order('created_at', { ascending: true }),
+  ])
 
-  if (error) {
-    return NextResponse.json({ error: 'Failed to query spans: ' + error.message }, { status: 500 })
+  if (spansRes.error) {
+    return NextResponse.json({ error: 'Failed to query spans: ' + spansRes.error.message }, { status: 500 })
   }
+
+  const allLlmSpans = spansRes.data || []
+  const evalScoresMap = new Map<string, { score: number; reasoning: string }>()
+  for (const es of evalScoresRes.data || []) {
+    evalScoresMap.set(es.span_id, { score: es.score, reasoning: es.reasoning })
+  }
+
+  const traceEvalsMap = new Map<string, { score: number; reasoning: string }>()
+  for (const te of traceEvalsRes.data || []) {
+    traceEvalsMap.set(te.trace_id, { score: te.score, reasoning: te.reasoning })
+  }
+
+  // Filter spans that qualify from eval_scores or trace_evaluations
+  const spans = allLlmSpans.filter((span) => {
+    if (evalScoresMap.has(span.id)) return true
+    if (span.trace_id && traceEvalsMap.has(span.trace_id)) return true
+    return false
+  })
 
   if (!spans || spans.length === 0) {
     return NextResponse.json({
