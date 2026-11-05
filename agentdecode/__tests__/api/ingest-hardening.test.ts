@@ -10,8 +10,8 @@ vi.mock('@/lib/alerts', () => ({
   checkAndFireAlerts: vi.fn(() => Promise.resolve()),
 }))
 
-let mockRpcFn: any = vi.fn()
-let mockApiKeyRecord: any = { id: 'key-1', project_id: 'proj-1' }
+const mockRpcFn: any = vi.fn()
+const mockApiKeyRecord: any = { id: 'key-1', project_id: 'proj-1' }
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => ({

@@ -25,8 +25,6 @@ CREATE OR REPLACE FUNCTION public.register_span_identity(
 )
 RETURNS TABLE (
   db_id UUID,
-  trace_id VARCHAR(64),
-  span_id VARCHAR(64),
   first_started_at TIMESTAMPTZ,
   was_inserted BOOLEAN
 )
@@ -44,7 +42,7 @@ BEGIN
     project_id, trace_id, span_id, db_id, first_started_at, created_at
   )
   VALUES (
-    p_project_id, p_trace_id, p_span_id, extensions.gen_random_uuid(), p_started_at, pg_catalog.clock_timestamp()
+    p_project_id, p_trace_id, p_span_id, pg_catalog.gen_random_uuid(), p_started_at, pg_catalog.clock_timestamp()
   )
   ON CONFLICT (project_id, trace_id, span_id) DO NOTHING
   RETURNING span_identity_ledger.db_id, span_identity_ledger.first_started_at
@@ -62,7 +60,7 @@ BEGIN
       AND l.span_id = p_span_id;
   END IF;
 
-  RETURN QUERY SELECT v_db_id, p_trace_id, p_span_id, v_first_started, v_inserted;
+  RETURN QUERY SELECT v_db_id, v_first_started, v_inserted;
 END;
 $$;
 
@@ -133,34 +131,36 @@ CREATE OR REPLACE FUNCTION public.ingest_span_transactional(
   p_session_id UUID,
   p_trace_id VARCHAR(64),
   p_span_id VARCHAR(64),
-  p_parent_span_id_hex VARCHAR(64),
-  p_client_provided_parent_uuid UUID,
-  p_name TEXT,
-  p_span_type TEXT,
-  p_status TEXT,
-  p_started_at TIMESTAMPTZ,
-  p_ended_at TIMESTAMPTZ,
-  p_duration_ms INTEGER,
-  p_model TEXT,
-  p_input JSONB,
-  p_output JSONB,
-  p_error_message TEXT,
-  p_input_tokens INTEGER,
-  p_output_tokens INTEGER,
-  p_cost_usd NUMERIC,
-  p_metadata JSONB,
-  p_is_legacy BOOLEAN,
-  p_attributes JSONB,
-  p_links JSONB,
-  p_workflow_step INTEGER,
-  p_iteration_index INTEGER
+  p_parent_span_id_hex VARCHAR(64) DEFAULT NULL,
+  p_parent_db_id UUID DEFAULT NULL,
+  p_name TEXT DEFAULT 'unnamed_span',
+  p_span_type TEXT DEFAULT 'chain',
+  p_status TEXT DEFAULT 'ok',
+  p_started_at TIMESTAMPTZ DEFAULT pg_catalog.clock_timestamp(),
+  p_ended_at TIMESTAMPTZ DEFAULT NULL,
+  p_duration_ms INTEGER DEFAULT NULL,
+  p_model TEXT DEFAULT NULL,
+  p_input JSONB DEFAULT NULL,
+  p_output JSONB DEFAULT NULL,
+  p_error_message TEXT DEFAULT NULL,
+  p_input_tokens INTEGER DEFAULT NULL,
+  p_output_tokens INTEGER DEFAULT NULL,
+  p_cost_usd NUMERIC DEFAULT NULL,
+  p_metadata JSONB DEFAULT '{}'::jsonb,
+  p_is_legacy BOOLEAN DEFAULT false,
+  p_attributes JSONB DEFAULT '{}'::jsonb,
+  p_links JSONB DEFAULT '[]'::jsonb,
+  p_workflow_step INTEGER DEFAULT NULL,
+  p_iteration_index INTEGER DEFAULT NULL
 )
 RETURNS TABLE (
   out_db_id UUID,
   out_trace_id VARCHAR(64),
   out_span_id VARCHAR(64),
   out_first_started_at TIMESTAMPTZ,
-  out_was_inserted BOOLEAN
+  out_was_inserted BOOLEAN,
+  out_resolved_parent_id UUID,
+  out_is_parent_pending BOOLEAN
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -171,6 +171,7 @@ DECLARE
   v_first_started_at TIMESTAMPTZ;
   v_was_inserted BOOLEAN;
   v_resolved_parent_id UUID := NULL;
+  v_is_parent_pending BOOLEAN := false;
   r RECORD;
 BEGIN
   -- 1. Register canonical span identity in ledger
@@ -195,9 +196,10 @@ BEGIN
         p_project_id, p_trace_id, p_parent_span_id_hex, v_db_id, v_first_started_at,
         pg_catalog.clock_timestamp(), pg_catalog.clock_timestamp() + INTERVAL '1 hour'
       );
+      v_is_parent_pending := true;
     END IF;
-  ELSIF p_client_provided_parent_uuid IS NOT NULL THEN
-    v_resolved_parent_id := p_client_provided_parent_uuid;
+  ELSIF p_parent_db_id IS NOT NULL THEN
+    v_resolved_parent_id := p_parent_db_id;
   END IF;
 
   -- 3. Idempotently insert span record
@@ -258,7 +260,7 @@ BEGIN
           updated_at = pg_catalog.clock_timestamp();
   END IF;
 
-  RETURN QUERY SELECT v_db_id, p_trace_id, p_span_id, v_first_started_at, v_was_inserted;
+  RETURN QUERY SELECT v_db_id, p_trace_id, p_span_id, v_first_started_at, v_was_inserted, v_resolved_parent_id, v_is_parent_pending;
 END;
 $$;
 
@@ -369,7 +371,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_lease_token UUID := extensions.gen_random_uuid();
+  v_lease_token UUID := pg_catalog.gen_random_uuid();
   v_lease_expires TIMESTAMPTZ := pg_catalog.clock_timestamp() + (p_lease_duration_seconds || ' seconds')::interval;
   v_limit INTEGER := COALESCE(NULLIF(p_batch_size, 0), 10);
 BEGIN
@@ -577,7 +579,7 @@ CREATE POLICY "org_members: owners can insert members"
 -- 2.2 Secure Organization Invitations Table (Hashed Tokens)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.org_invitations (
-  id           UUID PRIMARY KEY DEFAULT extensions.gen_random_uuid(),
+  id           UUID PRIMARY KEY DEFAULT pg_catalog.gen_random_uuid(),
   org_id       UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   email        TEXT NOT NULL,
   invited_by   UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -626,8 +628,19 @@ BEGIN
     RAISE EXCEPTION 'Invalid invitation token' USING ERRCODE = 'P0002';
   END IF;
 
-  -- Compute SHA-256 digest of incoming plaintext token
-  v_token_hash := encode(extensions.digest(p_token, 'sha256'), 'hex');
+  -- Compute SHA-256 digest of incoming plaintext token across vanilla Postgres and Supabase schemas
+  IF pg_catalog.to_regprocedure('extensions.digest(text,text)') IS NOT NULL THEN
+    EXECUTE 'SELECT pg_catalog.encode(extensions.digest($1, ''sha256''), ''hex'')'
+      INTO v_token_hash
+      USING p_token;
+  ELSIF pg_catalog.to_regprocedure('public.digest(text,text)') IS NOT NULL THEN
+    EXECUTE 'SELECT pg_catalog.encode(public.digest($1, ''sha256''), ''hex'')'
+      INTO v_token_hash
+      USING p_token;
+  ELSE
+    RAISE EXCEPTION 'pgcrypto digest(text,text) is required for invitation token hashing'
+      USING ERRCODE = '42883';
+  END IF;
 
   -- Get current user email from auth.users
   SELECT lower(email) INTO v_user_email
@@ -943,4 +956,3 @@ REVOKE ALL ON FUNCTION public.provision_future_spans_partitions(INTEGER) FROM PU
 GRANT EXECUTE ON FUNCTION public.provision_future_spans_partitions(INTEGER) TO service_role;
 
 COMMIT;
-
