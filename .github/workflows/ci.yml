@@ -142,6 +142,8 @@ jobs:
           CREATE TABLE IF NOT EXISTS auth.users (
             id uuid primary key default gen_random_uuid(),
             email text,
+            raw_user_meta_data jsonb default '{}'::jsonb,
+            raw_app_meta_data jsonb default '{}'::jsonb,
             created_at timestamptz default now()
           );
           CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid; $$ LANGUAGE sql STABLE;
@@ -420,8 +422,16 @@ jobs:
             v_job_id UUID;
             v_claim_res RECORD;
             v_final_ok BOOLEAN;
+            v_owner_id UUID := gen_random_uuid();
+            v_org_id UUID := gen_random_uuid();
             v_proj_id UUID := gen_random_uuid();
           BEGIN
+            INSERT INTO auth.users (id, email) VALUES (v_owner_id, 'worker-owner@test.com');
+            INSERT INTO public.organizations (id, name, slug, owner_id)
+            VALUES (v_org_id, 'Worker Test Org', 'worker-test-org', v_owner_id);
+            INSERT INTO public.projects (id, org_id, name)
+            VALUES (v_proj_id, v_org_id, 'Worker Test Project');
+
             INSERT INTO public.evaluation_outbox (
               id, project_id, trace_id, eval_type, trace_version, status, scheduled_at, payload
             )
@@ -443,7 +453,7 @@ jobs:
               'worker-ci',
               v_claim_res.lease_token,
               v_claim_res.trace_version,
-              0.95,
+              9.5,
               'CI evaluation test passed',
               false,
               NULL
