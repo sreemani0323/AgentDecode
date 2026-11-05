@@ -351,6 +351,9 @@ $$;
 -- ----------------------------------------------------------------------------
 -- 1.5 Hardened Worker Claim Function (Batch & Quiescence Protected)
 -- ----------------------------------------------------------------------------
+-- Drop legacy 2-argument overload from migration 008 to eliminate unhardened function and ambiguity
+DROP FUNCTION IF EXISTS public.claim_evaluation_job(VARCHAR, INTEGER);
+
 CREATE OR REPLACE FUNCTION public.claim_evaluation_job(
   p_worker_id VARCHAR(64),
   p_lease_duration_seconds INTEGER DEFAULT 180,
