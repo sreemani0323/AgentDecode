@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import crypto from 'crypto'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { sendInvitationEmail } from '@/lib/resend'
+import { logger } from '@/lib/logger'
 
-// GET /api/invites?org_id=xxx — List all members of an organization
+// GET /api/invites?org_id=xxx — List all members & pending invitations for an organization
 export async function GET(request: Request) {
   const rateLimit = checkRateLimit(request, 'read')
   if (!rateLimit.allowed) {
@@ -23,7 +26,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'org_id is required' }, { status: 400 })
   }
 
-  // Verify the requesting user is a member
+  // Verify the requesting user is a member of this organization
   const { data: membership } = await supabase
     .from('org_members')
     .select('role')
@@ -36,18 +39,15 @@ export async function GET(request: Request) {
   }
 
   // Fetch all members with profile info
-  const { data: members, error } = await supabase
+  const { data: members, error: membersError } = await supabase
     .from('org_members')
     .select('user_id, role, profiles(full_name, avatar_url)')
     .eq('org_id', orgId)
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  if (membersError) {
+    return NextResponse.json({ error: membersError.message }, { status: 500 })
   }
 
-  // Get emails from auth — we need to look up each user's email via their profile
-  // Since we can't directly query auth.users, we'll fetch user emails from supabase auth admin
-  // For now, we return what we have and the client can display names
   const enrichedMembers = (members || []).map((m: any) => ({
     user_id: m.user_id,
     role: m.role,
@@ -55,13 +55,28 @@ export async function GET(request: Request) {
     avatar_url: m.profiles?.avatar_url || null,
   }))
 
+  // If caller is an owner, also fetch active pending invitations
+  let pendingInvitations: any[] = []
+  if (membership.role === 'owner') {
+    const { data: invites } = await supabase
+      .from('org_invitations')
+      .select('id, email, role, created_at, expires_at')
+      .eq('org_id', orgId)
+      .is('used_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+
+    pendingInvitations = invites || []
+  }
+
   return NextResponse.json({
     members: enrichedMembers,
+    pendingInvitations,
     currentUserRole: membership.role,
   })
 }
 
-// POST /api/invites — Invite a user by email
+// POST /api/invites — Issue a cryptographically secure organization invitation
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(request, 'write')
   if (!rateLimit.allowed) {
@@ -75,14 +90,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const body = await request.json()
-  const { org_id, email } = body
+  const body = await request.json().catch(() => ({}))
+  const { org_id, email, role = 'member' } = body
 
-  if (!org_id || !email) {
-    return NextResponse.json({ error: 'org_id and email are required' }, { status: 400 })
+  if (!org_id || !email || typeof email !== 'string') {
+    return NextResponse.json({ error: 'org_id and a valid email are required' }, { status: 400 })
   }
 
-  // Verify the requesting user is an owner
+  const normalizedEmail = email.toLowerCase().trim()
+  if (!normalizedEmail.includes('@') || normalizedEmail.length < 3) {
+    return NextResponse.json({ error: 'Invalid email address' }, { status: 400 })
+  }
+
+  // 1. Verify caller is an owner of the organization
   const { data: membership } = await supabase
     .from('org_members')
     .select('role')
@@ -91,84 +111,76 @@ export async function POST(request: Request) {
     .single()
 
   if (!membership || membership.role !== 'owner') {
-    return NextResponse.json({ error: 'Only organization owners can invite members' }, { status: 403 })
+    return NextResponse.json(
+      { error: 'Only organization owners can create invitations' },
+      { status: 403 }
+    )
   }
 
-  // Find the user by email — look up in profiles joined with auth
-  // We need to find if a user with this email exists
-  // Since we can't query auth.users directly with the anon client, 
-  // we use a workaround: check if there's a profile with a matching user
-  // The proper way is via Supabase admin API, but for the authenticated client
-  // we'll search profiles where auth.users email matches
-
-  // Alternative: look up the user via the auth admin API
-  // For now, let's use a simple approach — try to find the user via RPC or direct lookup
-
-  // First, check if the email belongs to the current user
-  if (email === user.email) {
+  // 2. Prevent inviting own email
+  if (user.email && normalizedEmail === user.email.toLowerCase()) {
     return NextResponse.json({ error: 'You cannot invite yourself' }, { status: 400 })
   }
 
-  // We'll look for users who have signed up with this email
-  // by checking Supabase auth.users via a server-side query
-  // Since we're using the user's client (not service role), we need a different approach.
-  // Let's use an RPC function or just try to find the user in profiles.
-  
-  // Simplified approach: use the Supabase admin/service client to look up the user
-  const { createServiceClient } = await import('@/lib/supabase/server')
-  const adminSupabase = createServiceClient()
-
-  // Search for user by email using the auth admin API
-  // Use a large page size to avoid missing users beyond the default page 1
-  const { data: authUsers, error: authError } = await adminSupabase.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
-  })
-
-  if (authError) {
-    return NextResponse.json({ error: 'Failed to look up user' }, { status: 500 })
-  }
-
-  const targetUser = authUsers?.users?.find(u => u.email === email)
-
-  if (!targetUser) {
-    return NextResponse.json({
-      error: `No account found for ${email}. They need to sign up first.`
-    }, { status: 404 })
-  }
-
-  // Check if already a member
-  const { data: existingMember } = await supabase
-    .from('org_members')
-    .select('user_id')
-    .eq('org_id', org_id)
-    .eq('user_id', targetUser.id)
+  // 3. Fetch organization name for email branding
+  const { data: org } = await supabase
+    .from('organizations')
+    .select('name')
+    .eq('id', org_id)
     .single()
 
-  if (existingMember) {
-    return NextResponse.json({ error: 'This user is already a member' }, { status: 409 })
-  }
+  const orgName = org?.name || 'Your Organization'
 
-  // Add them as a member
-  const { error: insertError } = await adminSupabase
-    .from('org_members')
+  // 4. Generate cryptographically secure random token (32 bytes = 256 bits of entropy)
+  const rawToken = crypto.randomBytes(32).toString('hex')
+
+  // 5. Compute SHA-256 hash of the token for secure storage
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex')
+
+  // 6. Expiry: 7 days from now
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  // 7. Persist only the token_hash in org_invitations table
+  const adminSupabase = createServiceClient()
+  const { data: invitation, error: insertError } = await adminSupabase
+    .from('org_invitations')
     .insert({
       org_id,
-      user_id: targetUser.id,
-      role: 'member',
+      email: normalizedEmail,
+      invited_by: user.id,
+      role: role === 'owner' ? 'owner' : 'member',
+      token_hash: tokenHash,
+      expires_at: expiresAt,
     })
+    .select('id, org_id, email, role, expires_at, created_at')
+    .single()
 
   if (insertError) {
-    return NextResponse.json({ error: 'Failed to add member: ' + insertError.message }, { status: 500 })
+    logger.error('Failed to create organization invitation', insertError as Error)
+    return NextResponse.json(
+      { error: 'Failed to create invitation: ' + insertError.message },
+      { status: 500 }
+    )
   }
+
+  // 8. Deliver raw token ONLY to the intended recipient via email
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  const inviteUrl = `${baseUrl}/invites/accept?token=${rawToken}`
+  const emailResult = await sendInvitationEmail(normalizedEmail, orgName, inviteUrl)
 
   return NextResponse.json({
     success: true,
-    member: {
-      user_id: targetUser.id,
-      role: 'member',
-      full_name: targetUser.user_metadata?.full_name || email,
+    message: `${normalizedEmail} has been invited.`,
+    invitation: {
+      id: invitation.id,
+      org_id: invitation.org_id,
+      email: invitation.email,
+      role: invitation.role,
+      expires_at: invitation.expires_at,
     },
+    invite_url: inviteUrl,
+    token: rawToken,
+    email_sent: emailResult.success,
   })
 }
 
@@ -186,19 +198,17 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const body = await request.json()
+  const body = await request.json().catch(() => ({}))
   const { org_id, user_id } = body
 
   if (!org_id || !user_id) {
     return NextResponse.json({ error: 'org_id and user_id are required' }, { status: 400 })
   }
 
-  // Cannot remove yourself
   if (user_id === user.id) {
     return NextResponse.json({ error: 'You cannot remove yourself from the organization' }, { status: 400 })
   }
 
-  // Verify the requesting user is an owner
   const { data: membership } = await supabase
     .from('org_members')
     .select('role')
@@ -210,7 +220,6 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Only organization owners can remove members' }, { status: 403 })
   }
 
-  // Cannot remove another owner
   const { data: targetMember } = await supabase
     .from('org_members')
     .select('role')
@@ -222,7 +231,6 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Cannot remove an organization owner' }, { status: 403 })
   }
 
-  // Remove the member
   const { error: deleteError } = await supabase
     .from('org_members')
     .delete()
