@@ -130,6 +130,11 @@ jobs:
       - name: Run Supabase mock preflight
         run: |
           PGPASSWORD=postgrespassword psql -h localhost -U postgres -d agentdecode_test -v ON_ERROR_STOP=1 << 'EOF'
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon; END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
+          END $$;
           CREATE SCHEMA IF NOT EXISTS extensions;
           CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA extensions;
           GRANT USAGE ON SCHEMA extensions TO postgres, anon, authenticated, service_role, public;
@@ -141,11 +146,6 @@ jobs:
           );
           CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid; $$ LANGUAGE sql STABLE;
           CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$ SELECT '{}'::jsonb; $$ LANGUAGE sql STABLE;
-          DO $$ BEGIN
-            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon; END IF;
-            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
-            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
-          END $$;
           EOF
       - name: Apply Migrations (001 - 009)
         run: |

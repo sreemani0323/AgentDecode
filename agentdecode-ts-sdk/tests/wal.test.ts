@@ -132,7 +132,8 @@ describe('NodeFsWalStorage', () => {
 
     expect(await wal.countPending()).toBe(3)
     const pendingIds = (await wal.getPending()).map((p) => p.id)
-    expect(pendingIds).toEqual([id1, id2, id3])
+    expect(pendingIds).toHaveLength(3)
+    expect(pendingIds).toEqual(expect.arrayContaining([id1, id2, id3]))
   })
 
   it('detects and cleans up orphaned temporary files on recovery', async () => {

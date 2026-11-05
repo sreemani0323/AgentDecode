@@ -160,6 +160,7 @@ export class NodeFsWalStorage implements IWalStorage {
           } catch {}
         }
       }
+      entries.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
     } catch {
       // Non-blocking
     }
