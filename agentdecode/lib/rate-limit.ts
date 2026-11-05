@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server'
 
 /**
- * In-memory Token Bucket Rate Limiter
+ * Rate Limiting Infrastructure: In-memory & Distributed Token Bucket
  *
- * Provides basic protection against API abuse without external dependencies.
- * Resets on serverless cold starts, which is acceptable for our use case.
- *
- * Each unique identifier (IP or API key) gets its own token bucket.
- * Tokens refill at a steady rate. Each request consumes one token.
+ * Ingress & Reverse Proxy Header Ordering:
+ * 1. `x-vercel-forwarded-for`: Set by Vercel Edge Network. Cannot be spoofed by external clients.
+ * 2. `cf-connecting-ip`: Set by Cloudflare Edge Network.
+ * 3. `x-real-ip`: Standard reverse proxy header set by Nginx / AWS ALB.
+ * 4. `x-forwarded-for`: Standard proxy chain header; take the leftmost client IP.
+ * 5. Fallback: 'unknown'
  */
 
 interface TokenBucket {
@@ -15,7 +16,7 @@ interface TokenBucket {
   lastRefill: number
 }
 
-interface RateLimiterConfig {
+export interface RateLimiterConfig {
   /** Maximum tokens in the bucket (burst capacity) */
   maxTokens: number
   /** Tokens added per second (sustained rate) */
@@ -136,6 +137,29 @@ export const aiRateLimiter = new RateLimiter({
 })
 
 /**
+ * Safely extracts client IP address following trusted ingress precedence.
+ */
+export function getClientIp(request: Request): string {
+  // 1. Vercel Edge Network
+  const vercelIp = request.headers.get('x-vercel-forwarded-for')
+  if (vercelIp) return vercelIp.split(',')[0].trim()
+
+  // 2. Cloudflare Edge Network
+  const cfIp = request.headers.get('cf-connecting-ip')
+  if (cfIp) return cfIp.trim()
+
+  // 3. Standard Reverse Proxy (Nginx, ALB)
+  const realIp = request.headers.get('x-real-ip')
+  if (realIp) return realIp.trim()
+
+  // 4. Standard X-Forwarded-For chain
+  const forwarded = request.headers.get('x-forwarded-for')
+  if (forwarded) return forwarded.split(',')[0].trim()
+
+  return 'unknown'
+}
+
+/**
  * Extract the client identifier from a request.
  * Prefers the API key (unique per project), falls back to IP.
  * API keys are hashed so raw secrets are never stored in the in-memory rate limiter map.
@@ -152,18 +176,12 @@ export function getClientIdentifier(request: Request, apiKey?: string): string {
     return `key:${hash.toString(36)}`
   }
 
-  // Check forwarded headers (Vercel, Cloudflare, etc.)
-  const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) return `ip:${forwarded.split(',')[0].trim()}`
-
-  const realIp = request.headers.get('x-real-ip')
-  if (realIp) return `ip:${realIp}`
-
-  return 'ip:unknown'
+  const ip = getClientIp(request)
+  return `ip:${ip}`
 }
 
 /**
- * Helper to check rate limit for a request based on route type.
+ * Helper to check rate limit for a request based on route type (synchronous in-memory).
  * Returns { allowed: true } or { allowed: false, response: NextResponse }
  */
 export function checkRateLimit(
@@ -193,7 +211,7 @@ export function checkRateLimit(
         {
           status: 429,
           headers: {
-            'Retry-After': Math.ceil(rateCheck.retryAfterMs / 1000).toString(),
+            'Retry-After': Math.max(1, Math.ceil(rateCheck.retryAfterMs / 1000)).toString(),
             'X-RateLimit-Remaining': '0',
           },
         }
@@ -202,4 +220,130 @@ export function checkRateLimit(
   }
 
   return { allowed: true }
+}
+
+export interface DistributedRateLimitContext {
+  apiKey?: string
+  projectId?: string
+  supabase?: any
+  cost?: number
+}
+
+const RATE_CONFIGS: Record<string, RateLimiterConfig> = {
+  ingest: { maxTokens: 50, refillRate: 5, ttlMs: 300_000 },
+  read: { maxTokens: 100, refillRate: 10, ttlMs: 300_000 },
+  write: { maxTokens: 30, refillRate: 3, ttlMs: 300_000 },
+  ai: { maxTokens: 10, refillRate: 1, ttlMs: 300_000 },
+}
+
+/**
+ * Distributed Token Bucket Rate Limiter using PostgreSQL atomic RPC `consume_rate_limit_token`.
+ * Falls back to local in-memory RateLimiter if database is unavailable or unconfigured.
+ */
+export async function checkDistributedRateLimit(
+  request: Request,
+  type: 'read' | 'write' | 'ai' | 'ingest',
+  context?: DistributedRateLimitContext
+): Promise<{ allowed: true; remaining: number } | { allowed: false; response: NextResponse }> {
+  const config = RATE_CONFIGS[type] || DEFAULT_CONFIG
+  const cost = context?.cost ?? 1
+
+  let key: string
+  if (context?.projectId) {
+    key = `project:${context.projectId}:${type}`
+  } else if (context?.apiKey) {
+    key = `${getClientIdentifier(request, context.apiKey)}:${type}`
+  } else {
+    key = `ip:${getClientIp(request)}:${type}`
+  }
+
+  let supabase = context?.supabase
+  if (!supabase) {
+    try {
+      const { createServiceClient } = await import('@/lib/supabase/server')
+      supabase = createServiceClient()
+    } catch {
+      // Supabase unavailable in test / isolated run
+    }
+  }
+
+  // Attempt distributed rate limiting via PostgreSQL RPC
+  if (supabase && typeof supabase.rpc === 'function') {
+    try {
+      const { data, error } = await supabase.rpc('consume_rate_limit_token', {
+        p_key: key,
+        p_max_tokens: config.maxTokens,
+        p_refill_rate: config.refillRate,
+        p_cost: cost,
+        p_ttl_seconds: Math.ceil(config.ttlMs / 1000),
+      })
+
+      if (!error && data) {
+        const row = Array.isArray(data) ? data[0] : data
+        if (row && typeof row.allowed === 'boolean') {
+          if (!row.allowed) {
+            const retryAfterSec = Math.max(1, Math.ceil((row.retry_after_ms || 1000) / 1000))
+            return {
+              allowed: false,
+              response: NextResponse.json(
+                {
+                  error: 'Rate limit exceeded. Please slow down.',
+                  retry_after_ms: row.retry_after_ms,
+                },
+                {
+                  status: 429,
+                  headers: {
+                    'Retry-After': retryAfterSec.toString(),
+                    'X-RateLimit-Remaining': '0',
+                  },
+                }
+              ),
+            }
+          }
+
+          return {
+            allowed: true,
+            remaining: Math.floor(Number(row.remaining || 0)),
+          }
+        }
+      }
+    } catch {
+      // Database call threw; fall through to memory limiter
+    }
+  }
+
+  // Fallback to local in-memory token bucket
+  const limiter =
+    type === 'read'
+      ? apiReadRateLimiter
+      : type === 'write'
+      ? apiWriteRateLimiter
+      : type === 'ai'
+      ? aiRateLimiter
+      : ingestRateLimiter
+
+  const checkResult = limiter.check(key)
+  if (!checkResult.allowed) {
+    return {
+      allowed: false,
+      response: NextResponse.json(
+        {
+          error: 'Rate limit exceeded. Please slow down.',
+          retry_after_ms: checkResult.retryAfterMs,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': Math.max(1, Math.ceil(checkResult.retryAfterMs / 1000)).toString(),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      ),
+    }
+  }
+
+  return {
+    allowed: true,
+    remaining: checkResult.remaining,
+  }
 }

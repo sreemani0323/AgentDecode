@@ -8,6 +8,7 @@
  */
 
 import { describe, test, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { aiRateLimiter, ingestRateLimiter } from '@/lib/rate-limit'
 
 // Pre-computed SHA-256 hash of 'al_sk_test_key_12345'
@@ -50,6 +51,7 @@ function resetDb() {
 let groqCalls: any[] = []
 let alertsCalls: any[] = []
 let geminiCalls: any[] = []
+let geminiMockFn: any
 let spanInsertCounter = 0
 let ingestRateLimiterCheckMock: any
 
@@ -187,11 +189,13 @@ beforeEach(() => {
     },
   }))
 
+  geminiMockFn = vi.fn((...args: any[]) => {
+    geminiCalls.push(args)
+    return Promise.resolve({ diagnosis: 'Test diagnosis', suggested_fix: 'Test fix' })
+  })
+
   vi.doMock('@/lib/gemini', () => ({
-    explainSpanFailure: (...args: any[]) => {
-      geminiCalls.push(args)
-      return Promise.resolve({ diagnosis: 'Test diagnosis', suggested_fix: 'Test fix' })
-    },
+    explainSpanFailure: (...args: any[]) => geminiMockFn(...args),
   }))
 
   vi.doMock('@/lib/alerts', () => ({
@@ -207,6 +211,19 @@ beforeEach(() => {
     },
     getClientIdentifier: () => 'test-client',
     checkRateLimit: () => ({ allowed: true }),
+    checkDistributedRateLimit: async (req: Request, type: string, ctx?: any) => {
+      const res = ingestRateLimiterCheckMock(ctx?.apiKey || 'test-client')
+      if (!res.allowed) {
+        return {
+          allowed: false,
+          response: NextResponse.json(
+            { error: 'Rate limit exceeded. Please slow down.', retry_after_ms: res.retryAfterMs },
+            { status: 429, headers: { 'Retry-After': '2', 'X-RateLimit-Remaining': '0' } }
+          ),
+        }
+      }
+      return { allowed: true, remaining: res.remaining }
+    },
   }))
 
   vi.doMock('@/lib/supabase/server', () => ({
@@ -398,40 +415,7 @@ describe('Full Journey Integration Tests', () => {
       started_at: '2026-06-25T10:00:00Z',
     })
 
-    // Reset modules so the explain route re-imports with our new mock
-    vi.resetModules()
-
-    // Re-register all mocks (needed after resetModules)
-    vi.doMock('@/lib/logger', () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }))
-    vi.doMock('@/lib/env', () => ({
-      checkEnv: () => ({ ok: true, missing: [], warnings: [] }),
-    }))
-    vi.doMock('@/lib/rate-limit', () => ({
-      ingestRateLimiter: {
-        check: () => ({ allowed: true, remaining: 49, retryAfterMs: 0 }),
-      },
-      getClientIdentifier: () => 'test-client',
-      checkRateLimit: () => ({ allowed: true }),
-    }))
-    vi.doMock('@/lib/supabase/server', () => ({
-      createServiceClient: () => ({
-        from: (table: string) => createMockQueryBuilder(table),
-      }),
-      createClient: () => Promise.resolve({
-        from: (table: string) => createMockQueryBuilder(table),
-        auth: {
-          getUser: () => Promise.resolve({ data: { user: { id: 'user-1' } } }),
-        },
-      }),
-    }))
-
-    // Override Gemini mock to throw
-    vi.doMock('@/lib/gemini', () => ({
-      explainSpanFailure: () => Promise.reject(new Error('Gemini parse failure')),
-    }))
-
+    geminiMockFn.mockRejectedValueOnce(new Error('Gemini parse failure'))
     process.env.GEMINI_API_KEY = 'test-key'
 
     const { POST } = await import('@/app/api/spans/[id]/explain/route')

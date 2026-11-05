@@ -9,6 +9,21 @@ export const W3C_SPAN_ID_REGEX = /^[0-9a-f]{16}$/
 export const ALL_ZEROS_TRACE_ID = '00000000000000000000000000000000'
 export const ALL_ZEROS_SPAN_ID = '0000000000000000'
 
+export const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024 // 4 MiB (safe for Vercel Functions 4.5 MB limit)
+export const MAX_FIELD_BYTES = 1 * 1024 * 1024 // 1 MB for individual input/output
+export const MAX_METADATA_BYTES = 256 * 1024 // 256 KB for attributes and metadata
+export const MAX_SPANS_PER_REQUEST = 500
+
+function estimateJsonBytes(val: unknown): number {
+  if (val === null || val === undefined) return 0
+  if (typeof val === 'string') return Buffer.byteLength(val, 'utf8')
+  try {
+    return Buffer.byteLength(JSON.stringify(val), 'utf8')
+  } catch {
+    return 0
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Span schema
 // ---------------------------------------------------------------------------
@@ -50,19 +65,31 @@ export const SpanSchema = z.object({
     }, { message: 'parent_span_id_hex must be a valid 16-hex W3C parent SpanId' }),
 
   is_legacy: z.boolean().optional().default(false),
-  attributes: z.record(z.string(), z.unknown()).optional().default({}),
+  attributes: z.record(z.string(), z.unknown()).optional().default({})
+    .refine((v) => estimateJsonBytes(v) <= MAX_METADATA_BYTES, {
+      message: `attributes exceed maximum allowed size of ${MAX_METADATA_BYTES / 1024}KB`,
+    }),
   links: z.array(z.record(z.string(), z.unknown())).optional().default([]),
   workflow_step: z.number().int().optional().nullable(),
   iteration_index: z.number().int().optional().nullable(),
 
   model: z.string().optional().nullable(),
-  input: z.unknown().optional().nullable(),
-  output: z.unknown().optional().nullable(),
+  input: z.unknown().optional().nullable()
+    .refine((v) => estimateJsonBytes(v) <= MAX_FIELD_BYTES, {
+      message: `input exceeds maximum allowed size of ${MAX_FIELD_BYTES / (1024 * 1024)}MB`,
+    }),
+  output: z.unknown().optional().nullable()
+    .refine((v) => estimateJsonBytes(v) <= MAX_FIELD_BYTES, {
+      message: `output exceeds maximum allowed size of ${MAX_FIELD_BYTES / (1024 * 1024)}MB`,
+    }),
   error_message: z.string().optional().nullable(),
   input_tokens: z.number().int().nonnegative().optional().nullable(),
   output_tokens: z.number().int().nonnegative().optional().nullable(),
   cost_usd: z.number().nonnegative().optional().nullable(),
-  metadata: z.record(z.string(), z.unknown()).optional().default({}),
+  metadata: z.record(z.string(), z.unknown()).optional().default({})
+    .refine((v) => estimateJsonBytes(v) <= MAX_METADATA_BYTES, {
+      message: `metadata exceeds maximum allowed size of ${MAX_METADATA_BYTES / 1024}KB`,
+    }),
 })
 
 // ---------------------------------------------------------------------------
@@ -77,7 +104,7 @@ export const IngestPayloadSchema = z.object({
   spans: z
     .array(SpanSchema)
     .min(1, 'spans array must contain at least one span')
-    .max(500, 'Maximum 500 spans per request'),
+    .max(MAX_SPANS_PER_REQUEST, `Maximum ${MAX_SPANS_PER_REQUEST} spans per request`),
 })
 
 // ---------------------------------------------------------------------------

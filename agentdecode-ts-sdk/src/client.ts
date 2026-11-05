@@ -1,4 +1,9 @@
-import { Session, SessionOptions } from './session.js'
+import {
+  Session,
+  SessionOptions,
+  MAX_SAFE_INGEST_PAYLOAD_BYTES,
+  splitSpansIntoBoundedChunks,
+} from './session.js'
 import { SpanType } from './span.js'
 import { createWalStorage, IWalStorage } from './wal/index.js'
 
@@ -135,6 +140,42 @@ export class AgentDecode {
 
     for (const batch of pending) {
       try {
+        const payload = batch.payload as any
+        if (
+          payload &&
+          Array.isArray(payload.spans) &&
+          payload.spans.length > 1
+        ) {
+          const serialized = JSON.stringify(payload)
+          const byteLength =
+            typeof Buffer !== 'undefined'
+              ? Buffer.byteLength(serialized, 'utf8')
+              : new TextEncoder().encode(serialized).length
+
+          if (byteLength > MAX_SAFE_INGEST_PAYLOAD_BYTES) {
+            const basePayload = {
+              session_id: payload.session_id,
+              session_name: payload.session_name,
+            }
+            const chunks = splitSpansIntoBoundedChunks(
+              payload.spans,
+              basePayload,
+              MAX_SAFE_INGEST_PAYLOAD_BYTES,
+            )
+            for (const chunk of chunks) {
+              const chunkPayload = { ...basePayload, spans: chunk }
+              if (sendFn) {
+                await sendFn(chunkPayload)
+              } else {
+                await this._sendPayload(chunkPayload)
+              }
+            }
+            await this.wal.acknowledge(batch.id)
+            acked++
+            continue
+          }
+        }
+
         if (sendFn) {
           await sendFn(batch.payload)
         } else {
@@ -216,7 +257,6 @@ export class AgentDecode {
 export class SessionRunner {
   /** @internal */
   _session: Session
-
   constructor(session: Session) {
     this._session = session
   }

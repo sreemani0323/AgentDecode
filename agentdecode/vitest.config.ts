@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    env: {
+      ALLOW_INGEST_FALLBACK: 'true',
+    },
     include: ['__tests__/**/*.test.ts', '__tests__/**/*.test.tsx'],
     coverage: {
       provider: 'v8',
