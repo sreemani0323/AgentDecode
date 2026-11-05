@@ -130,7 +130,9 @@ jobs:
       - name: Run Supabase mock preflight
         run: |
           PGPASSWORD=postgrespassword psql -h localhost -U postgres -d agentdecode_test -v ON_ERROR_STOP=1 << 'EOF'
-          CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+          CREATE SCHEMA IF NOT EXISTS extensions;
+          CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA extensions;
+          GRANT USAGE ON SCHEMA extensions TO postgres, anon, authenticated, service_role, public;
           CREATE SCHEMA IF NOT EXISTS auth;
           CREATE TABLE IF NOT EXISTS auth.users (
             id uuid primary key default gen_random_uuid(),
@@ -252,13 +254,13 @@ jobs:
 
             -- 3. Verify each audited function signature is present and no unexpected function signature exists
             FOR i IN 1..array_length(v_expected_15, 1) LOOP
-              IF NOT (v_expected_15[i] = ANY(v_all_secdef_fns)) THEN
+              IF NOT (v_expected_15[i]::oid = ANY(v_all_secdef_fns::oid[])) THEN
                 RAISE EXCEPTION 'Audited SECURITY DEFINER function % is missing from public schema', v_expected_15[i];
               END IF;
             END LOOP;
 
             FOR i IN 1..array_length(v_all_secdef_fns, 1) LOOP
-              IF NOT (v_all_secdef_fns[i] = ANY(v_expected_15)) THEN
+              IF NOT (v_all_secdef_fns[i]::oid = ANY(v_expected_15::oid[])) THEN
                 RAISE EXCEPTION 'Unexpected SECURITY DEFINER function % found in public schema', v_all_secdef_fns[i];
               END IF;
             END LOOP;
@@ -313,7 +315,7 @@ jobs:
               WHERE acl.privilege_type = 'EXECUTE'
                 AND acl.grantee <> v_fn.proowner
                 AND acl.grantee <> v_service_oid
-                AND (acl.grantee <> v_auth_oid OR NOT (v_fn.regproc = ANY(v_authenticated_allowed)));
+                AND (acl.grantee <> v_auth_oid OR NOT (v_fn.oid = ANY(v_authenticated_allowed::oid[])));
 
               IF v_unexpected_grantees IS NOT NULL AND array_length(v_unexpected_grantees, 1) > 0 THEN
                 RAISE EXCEPTION 'SECURITY DEFINER function % has unexpected EXECUTE grant to role(s): %',
@@ -321,7 +323,7 @@ jobs:
               END IF;
 
               -- F. Backend-only RPCs (9 functions) must NOT be executable by authenticated users and MUST be executable by service_role
-              IF (v_fn.regproc = ANY(v_backend_only)) THEN
+              IF (v_fn.oid = ANY(v_backend_only::oid[])) THEN
                 IF has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR v_has_auth_acl THEN
                   RAISE EXCEPTION 'Role authenticated has unsafe EXECUTE privilege on backend RPC %', v_fn.regproc;
                 END IF;
@@ -332,7 +334,7 @@ jobs:
               END IF;
 
               -- G. Authenticated users may ONLY execute the 4 approved client helpers
-              IF (v_fn.regproc = ANY(v_authenticated_allowed)) THEN
+              IF (v_fn.oid = ANY(v_authenticated_allowed::oid[])) THEN
                 IF NOT has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR NOT v_has_auth_acl THEN
                   RAISE EXCEPTION 'Role authenticated lacks required EXECUTE privilege on approved helper %', v_fn.regproc;
                 END IF;
@@ -342,7 +344,7 @@ jobs:
               END IF;
 
               -- H. Trigger functions must NOT receive unnecessary application-role grants (authenticated)
-              IF (v_fn.regproc = ANY(v_trigger_fns)) THEN
+              IF (v_fn.oid = ANY(v_trigger_fns::oid[])) THEN
                 IF has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR v_has_auth_acl THEN
                   RAISE EXCEPTION 'Trigger function % received unnecessary authenticated role grant', v_fn.regproc;
                 END IF;
@@ -379,7 +381,11 @@ jobs:
           BEGIN
             v_owner_id := gen_random_uuid();
             v_invitee_id := gen_random_uuid();
-            v_hash := encode(extensions.digest(v_token, 'sha256'), 'hex');
+            IF pg_catalog.to_regprocedure('extensions.digest(text,text)') IS NOT NULL THEN
+              EXECUTE 'SELECT pg_catalog.encode(extensions.digest($1, ''sha256''), ''hex'')' INTO v_hash USING v_token;
+            ELSE
+              EXECUTE 'SELECT pg_catalog.encode(public.digest($1, ''sha256''), ''hex'')' INTO v_hash USING v_token;
+            END IF;
 
             INSERT INTO auth.users (id, email) VALUES (v_owner_id, 'owner@test.com');
             INSERT INTO auth.users (id, email) VALUES (v_invitee_id, 'invitee@test.com');

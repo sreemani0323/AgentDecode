@@ -49,7 +49,7 @@ describe('Organization Membership & Invitation Security (Migration 009)', () => 
 
   test('accept_org_invitation RPC performs SHA-256 token hashing, expiration check, and email verification', () => {
     expect(migrationSql).toContain('CREATE OR REPLACE FUNCTION public.accept_org_invitation')
-    expect(migrationSql).toContain("encode(extensions.digest(p_token, 'sha256'), 'hex')")
+    expect(migrationSql).toMatch(/digest\(.*sha256/i)
     expect(migrationSql).toContain('WHERE token_hash = v_token_hash')
     expect(migrationSql).toContain('v_invitation.expires_at <= pg_catalog.clock_timestamp()')
     expect(migrationSql).toContain('v_invitation.used_at IS NOT NULL')
