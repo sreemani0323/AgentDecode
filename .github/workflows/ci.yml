@@ -67,3 +67,400 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-key
       SUPABASE_SERVICE_ROLE_KEY: placeholder-key
+
+  ts-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: agentdecode-ts-sdk/package-lock.json
+      - run: npm ci
+        working-directory: agentdecode-ts-sdk
+      - run: npm run typecheck
+        working-directory: agentdecode-ts-sdk
+      - run: npm test
+        working-directory: agentdecode-ts-sdk
+      - run: npm run build
+        working-directory: agentdecode-ts-sdk
+
+  python-sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -e agentdecode-python-sdk
+      - name: Run Python SDK tests
+        run: |
+          cd agentdecode-python-sdk
+          pytest tests
+
+  postgres-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agentdecode_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PostgreSQL client
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Run Supabase mock preflight
+        run: |
+          PGPASSWORD=postgrespassword psql -h localhost -U postgres -d agentdecode_test -v ON_ERROR_STOP=1 << 'EOF'
+          CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+          CREATE SCHEMA IF NOT EXISTS auth;
+          CREATE TABLE IF NOT EXISTS auth.users (
+            id uuid primary key default gen_random_uuid(),
+            email text,
+            created_at timestamptz default now()
+          );
+          CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid; $$ LANGUAGE sql STABLE;
+          CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$ SELECT '{}'::jsonb; $$ LANGUAGE sql STABLE;
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon; END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
+          END $$;
+          EOF
+      - name: Apply Migrations (001 - 009)
+        run: |
+          migrations=$(ls agentdecode/supabase/migrations/*.sql | sort)
+          count=$(echo "$migrations" | wc -w)
+          echo "Found $count migration files to apply."
+          if [ "$count" -lt 9 ]; then
+            echo "Error: Expected at least 9 migrations (001-009), but found $count"
+            exit 1
+          fi
+          applied=0
+          for migration in $migrations; do
+            echo "Applying $migration with ON_ERROR_STOP=1..."
+            PGPASSWORD=postgrespassword psql -h localhost -U postgres -d agentdecode_test -v ON_ERROR_STOP=1 -f "$migration"
+            applied=$((applied + 1))
+          done
+          echo "Successfully applied $applied migrations sequentially (001 - 009)."
+      - name: Verify Migration Schema Integrity & Privileges
+        run: |
+          PGPASSWORD=postgrespassword psql -h localhost -U postgres -d agentdecode_test -v ON_ERROR_STOP=1 << 'EOF'
+          -- Verify core tables exist
+          DO $$
+          DECLARE
+            tbl TEXT;
+            expected_tables TEXT[] := ARRAY['profiles', 'organizations', 'org_members', 'org_invitations', 'projects', 'api_keys', 'sessions', 'spans', 'rate_limit_buckets', 'evaluation_outbox', 'trace_evaluations'];
+          BEGIN
+            FOREACH tbl IN ARRAY expected_tables LOOP
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = tbl
+              ) THEN
+                RAISE EXCEPTION 'Expected table % does not exist', tbl;
+              END IF;
+            END LOOP;
+          END $$;
+
+          -- Verify ALL SECURITY DEFINER functions dynamically (15-function reconciled inventory with exact regprocedure signatures & catalog ACL checks)
+          DO $$
+          DECLARE
+            v_all_secdef_fns regprocedure[];
+            v_fn RECORD;
+            v_expected_15 regprocedure[] := ARRAY[
+              'public.accept_org_invitation(character varying)'::regprocedure,
+              'public.claim_evaluation_job(character varying, integer, integer)'::regprocedure,
+              'public.cleanup_expired_rate_limit_buckets(integer)'::regprocedure,
+              'public.consume_rate_limit_token(character varying, numeric, numeric, numeric, integer)'::regprocedure,
+              'public.finalize_evaluation_job(uuid, character varying, uuid, integer, numeric, text, boolean, uuid)'::regprocedure,
+              'public.handle_new_profile()'::regprocedure,
+              'public.handle_new_user()'::regprocedure,
+              'public.ingest_span_transactional(uuid, uuid, character varying, character varying, character varying, uuid, text, text, text, timestamp with time zone, timestamp with time zone, integer, text, jsonb, jsonb, text, integer, integer, numeric, jsonb, boolean, jsonb, jsonb, integer, integer)'::regprocedure,
+              'public.ingest_spans_batch_transactional(uuid, uuid, jsonb)'::regprocedure,
+              'public.is_org_member(uuid)'::regprocedure,
+              'public.is_org_owner(uuid)'::regprocedure,
+              'public.is_project_member(uuid)'::regprocedure,
+              'public.provision_future_spans_partitions(integer)'::regprocedure,
+              'public.provision_spans_partition(date, date)'::regprocedure,
+              'public.register_span_identity(uuid, character varying, character varying, timestamp with time zone)'::regprocedure
+            ];
+            v_backend_only regprocedure[] := ARRAY[
+              'public.register_span_identity(uuid, character varying, character varying, timestamp with time zone)'::regprocedure,
+              'public.ingest_span_transactional(uuid, uuid, character varying, character varying, character varying, uuid, text, text, text, timestamp with time zone, timestamp with time zone, integer, text, jsonb, jsonb, text, integer, integer, numeric, jsonb, boolean, jsonb, jsonb, integer, integer)'::regprocedure,
+              'public.ingest_spans_batch_transactional(uuid, uuid, jsonb)'::regprocedure,
+              'public.claim_evaluation_job(character varying, integer, integer)'::regprocedure,
+              'public.finalize_evaluation_job(uuid, character varying, uuid, integer, numeric, text, boolean, uuid)'::regprocedure,
+              'public.consume_rate_limit_token(character varying, numeric, numeric, numeric, integer)'::regprocedure,
+              'public.cleanup_expired_rate_limit_buckets(integer)'::regprocedure,
+              'public.provision_spans_partition(date, date)'::regprocedure,
+              'public.provision_future_spans_partitions(integer)'::regprocedure
+            ];
+            v_authenticated_allowed regprocedure[] := ARRAY[
+              'public.accept_org_invitation(character varying)'::regprocedure,
+              'public.is_org_member(uuid)'::regprocedure,
+              'public.is_org_owner(uuid)'::regprocedure,
+              'public.is_project_member(uuid)'::regprocedure
+            ];
+            v_trigger_fns regprocedure[] := ARRAY[
+              'public.handle_new_profile()'::regprocedure,
+              'public.handle_new_user()'::regprocedure
+            ];
+            v_count INTEGER;
+            v_anon_oid OID;
+            v_auth_oid OID;
+            v_service_oid OID;
+            v_has_public_acl BOOLEAN;
+            v_has_anon_acl BOOLEAN;
+            v_has_auth_acl BOOLEAN;
+            v_has_service_acl BOOLEAN;
+            v_unexpected_grantees TEXT[];
+          BEGIN
+            -- Retrieve role OIDs
+            SELECT oid INTO v_anon_oid FROM pg_roles WHERE rolname = 'anon';
+            SELECT oid INTO v_auth_oid FROM pg_roles WHERE rolname = 'authenticated';
+            SELECT oid INTO v_service_oid FROM pg_roles WHERE rolname = 'service_role';
+
+            -- 1. Dynamically enumerate EVERY security definer function in the public schema by exact regprocedure signature
+            SELECT array_agg(p.oid::regprocedure ORDER BY p.oid::regprocedure::text), count(*)
+            INTO v_all_secdef_fns, v_count
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.prosecdef = true;
+
+            -- 2. Strict inventory reconciliation: exactly 15 functions must exist
+            IF v_count <> 15 THEN
+              RAISE EXCEPTION 'SECURITY DEFINER function inventory mismatch: expected 15, found %: %', v_count, v_all_secdef_fns;
+            END IF;
+
+            -- 3. Verify each audited function signature is present and no unexpected function signature exists
+            FOR i IN 1..array_length(v_expected_15, 1) LOOP
+              IF NOT (v_expected_15[i] = ANY(v_all_secdef_fns)) THEN
+                RAISE EXCEPTION 'Audited SECURITY DEFINER function % is missing from public schema', v_expected_15[i];
+              END IF;
+            END LOOP;
+
+            FOR i IN 1..array_length(v_all_secdef_fns, 1) LOOP
+              IF NOT (v_all_secdef_fns[i] = ANY(v_expected_15)) THEN
+                RAISE EXCEPTION 'Unexpected SECURITY DEFINER function % found in public schema', v_all_secdef_fns[i];
+              END IF;
+            END LOOP;
+
+            -- 4. Dynamically audit search_path, effective permissions, and catalog ACLs for EVERY security definer function
+            FOR v_fn IN
+              SELECT p.oid, p.oid::regprocedure AS regproc, p.proname, p.proowner, p.prosecdef, p.proconfig, p.proacl
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.prosecdef = true
+            LOOP
+              -- A. Every security definer function MUST have an empty search_path
+              IF NOT ('search_path=' = ANY(v_fn.proconfig) OR 'search_path=""' = ANY(v_fn.proconfig)) THEN
+                RAISE EXCEPTION 'SECURITY DEFINER function % must have search_path = "" (found: %)', v_fn.regproc, v_fn.proconfig;
+              END IF;
+
+              -- B. Explode catalog ACL accounting for PostgreSQL default function privileges (if proacl is NULL)
+              SELECT
+                EXISTS (
+                  SELECT 1 FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) acl
+                  WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+                ),
+                EXISTS (
+                  SELECT 1 FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) acl
+                  WHERE acl.grantee = v_anon_oid AND acl.privilege_type = 'EXECUTE'
+                ),
+                EXISTS (
+                  SELECT 1 FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) acl
+                  WHERE acl.grantee = v_auth_oid AND acl.privilege_type = 'EXECUTE'
+                ),
+                EXISTS (
+                  SELECT 1 FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) acl
+                  WHERE acl.grantee = v_service_oid AND acl.privilege_type = 'EXECUTE'
+                )
+              INTO v_has_public_acl, v_has_anon_acl, v_has_auth_acl, v_has_service_acl;
+
+              -- C. Check PUBLIC EXECUTE ACLs explicitly across ALL 15 functions: PUBLIC must NEVER have effective or catalog EXECUTE
+              IF has_function_privilege('public', v_fn.oid, 'EXECUTE') OR v_has_public_acl THEN
+                RAISE EXCEPTION 'Role PUBLIC has unsafe effective/catalog EXECUTE on SECURITY DEFINER function %', v_fn.regproc;
+              END IF;
+
+              -- D. Role anon must NEVER have effective or catalog EXECUTE on ANY security definer function
+              IF has_function_privilege('anon', v_fn.oid, 'EXECUTE') OR v_has_anon_acl THEN
+                RAISE EXCEPTION 'Role anon has unsafe effective/catalog EXECUTE privilege on SECURITY DEFINER function %', v_fn.regproc;
+              END IF;
+
+              -- E. Detect unexpected EXECUTE grants to database roles outside the approved owner/service_role/authenticated matrix
+              SELECT array_agg(DISTINCT COALESCE(r.rolname, 'PUBLIC(0)'))
+              INTO v_unexpected_grantees
+              FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) acl
+              LEFT JOIN pg_roles r ON r.oid = acl.grantee
+              WHERE acl.privilege_type = 'EXECUTE'
+                AND acl.grantee <> v_fn.proowner
+                AND acl.grantee <> v_service_oid
+                AND (acl.grantee <> v_auth_oid OR NOT (v_fn.regproc = ANY(v_authenticated_allowed)));
+
+              IF v_unexpected_grantees IS NOT NULL AND array_length(v_unexpected_grantees, 1) > 0 THEN
+                RAISE EXCEPTION 'SECURITY DEFINER function % has unexpected EXECUTE grant to role(s): %',
+                  v_fn.regproc, v_unexpected_grantees;
+              END IF;
+
+              -- F. Backend-only RPCs (9 functions) must NOT be executable by authenticated users and MUST be executable by service_role
+              IF (v_fn.regproc = ANY(v_backend_only)) THEN
+                IF has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR v_has_auth_acl THEN
+                  RAISE EXCEPTION 'Role authenticated has unsafe EXECUTE privilege on backend RPC %', v_fn.regproc;
+                END IF;
+
+                IF NOT has_function_privilege('service_role', v_fn.oid, 'EXECUTE') OR NOT v_has_service_acl THEN
+                  RAISE EXCEPTION 'Role service_role lacks EXECUTE privilege on backend RPC %', v_fn.regproc;
+                END IF;
+              END IF;
+
+              -- G. Authenticated users may ONLY execute the 4 approved client helpers
+              IF (v_fn.regproc = ANY(v_authenticated_allowed)) THEN
+                IF NOT has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR NOT v_has_auth_acl THEN
+                  RAISE EXCEPTION 'Role authenticated lacks required EXECUTE privilege on approved helper %', v_fn.regproc;
+                END IF;
+                IF NOT has_function_privilege('service_role', v_fn.oid, 'EXECUTE') OR NOT v_has_service_acl THEN
+                  RAISE EXCEPTION 'Role service_role lacks required EXECUTE privilege on approved helper %', v_fn.regproc;
+                END IF;
+              END IF;
+
+              -- H. Trigger functions must NOT receive unnecessary application-role grants (authenticated)
+              IF (v_fn.regproc = ANY(v_trigger_fns)) THEN
+                IF has_function_privilege('authenticated', v_fn.oid, 'EXECUTE') OR v_has_auth_acl THEN
+                  RAISE EXCEPTION 'Trigger function % received unnecessary authenticated role grant', v_fn.regproc;
+                END IF;
+              END IF;
+            END LOOP;
+          END $$;
+
+          -- 1. Verify Spans Partition Infrastructure & Default Routing
+          SELECT public.provision_future_spans_partitions(2);
+
+          -- 2. Verify Rate-Limit Token Consumption & Bounded Cleanup
+          DO $$
+          DECLARE
+            v_res RECORD;
+            v_del INTEGER;
+          BEGIN
+            SELECT * INTO v_res FROM public.consume_rate_limit_token('test-key', 10, 1, 1, 300);
+            IF NOT v_res.allowed THEN
+              RAISE EXCEPTION 'Rate limit should be allowed on first token';
+            END IF;
+            -- Expired bucket cleanup
+            v_del := public.cleanup_expired_rate_limit_buckets(100);
+          END $$;
+
+          -- 3. Verify Org Invitations Hashing, Single-Use Acceptance, and Expiry Rejection
+          DO $$
+          DECLARE
+            v_org_id UUID;
+            v_owner_id UUID;
+            v_invitee_id UUID;
+            v_token TEXT := 'test_secret_invitation_token_123';
+            v_hash TEXT;
+            v_accept_res JSONB;
+          BEGIN
+            v_owner_id := gen_random_uuid();
+            v_invitee_id := gen_random_uuid();
+            v_hash := encode(extensions.digest(v_token, 'sha256'), 'hex');
+
+            INSERT INTO auth.users (id, email) VALUES (v_owner_id, 'owner@test.com');
+            INSERT INTO auth.users (id, email) VALUES (v_invitee_id, 'invitee@test.com');
+
+            INSERT INTO public.organizations (id, name, slug, owner_id)
+            VALUES (gen_random_uuid(), 'Test Org', 'test-org-ci', v_owner_id)
+            RETURNING id INTO v_org_id;
+
+            INSERT INTO public.org_invitations (org_id, email, invited_by, token_hash)
+            VALUES (v_org_id, 'invitee@test.com', v_owner_id, v_hash);
+
+            -- Simulate acceptance as invitee
+            PERFORM set_config('request.jwt.claim.sub', v_invitee_id::text, true);
+            v_accept_res := public.accept_org_invitation(v_token);
+            IF (v_accept_res->>'success')::boolean IS NOT TRUE THEN
+              RAISE EXCEPTION 'Failed to accept invitation: %', v_accept_res;
+            END IF;
+
+            -- Re-acceptance must fail atomically (single-use enforcement)
+            BEGIN
+              PERFORM public.accept_org_invitation(v_token);
+              RAISE EXCEPTION 'Second acceptance of used invitation succeeded unexpectedly';
+            EXCEPTION WHEN OTHERS THEN
+              -- Expected failure
+              NULL;
+            END;
+          END $$;
+
+          -- 4. Verify Outbox Claiming & Atomic Finalization Mechanics
+          DO $$
+          DECLARE
+            v_job_id UUID;
+            v_claim_res RECORD;
+            v_final_ok BOOLEAN;
+            v_proj_id UUID := gen_random_uuid();
+          BEGIN
+            INSERT INTO public.evaluation_outbox (
+              id, project_id, trace_id, eval_type, trace_version, status, scheduled_at, payload
+            )
+            VALUES (
+              gen_random_uuid(), v_proj_id, 'trace-ci-test', 'span_score', 1, 'pending',
+              clock_timestamp() - INTERVAL '1 second', '{"test": true}'::jsonb
+            )
+            RETURNING id INTO v_job_id;
+
+            SELECT * INTO v_claim_res
+            FROM public.claim_evaluation_job('worker-ci', 60, 1);
+
+            IF v_claim_res.outbox_id IS NULL THEN
+              RAISE EXCEPTION 'Failed to claim scheduled outbox job';
+            END IF;
+
+            v_final_ok := public.finalize_evaluation_job(
+              v_claim_res.outbox_id,
+              'worker-ci',
+              v_claim_res.lease_token,
+              v_claim_res.trace_version,
+              0.95,
+              'CI evaluation test passed',
+              false,
+              NULL
+            );
+
+            IF NOT v_final_ok THEN
+              RAISE EXCEPTION 'Failed to finalize claimed outbox job';
+            END IF;
+          END $$;
+
+          -- 5. Verify RLS Enforcement on Core Tables
+          DO $$
+          DECLARE
+            v_count INTEGER;
+          BEGIN
+            SELECT count(*) INTO v_count
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename IN ('spans', 'rate_limit_buckets', 'org_invitations', 'evaluation_outbox', 'trace_evaluations')
+              AND rowsecurity = true;
+
+            IF v_count <> 5 THEN
+              RAISE EXCEPTION 'RLS is not enabled on all 5 sensitive tables (found % enabled)', v_count;
+            END IF;
+          END $$;
+          EOF

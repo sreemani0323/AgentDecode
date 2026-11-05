@@ -11,9 +11,50 @@ export interface SessionOptions {
   wal?: IWalStorage
 }
 
+export const MAX_SAFE_INGEST_PAYLOAD_BYTES = 3.5 * 1024 * 1024 // 3.5 MiB (safely below 4 MiB gateway limit)
+
+/**
+ * Splits an array of spans into bounded chunks ensuring each chunk's JSON-serialized
+ * payload stays strictly below maxBytes. Preserves stable span IDs and trace relationships.
+ */
+export function splitSpansIntoBoundedChunks(
+  spans: SpanData[],
+  basePayload: { session_id?: string; session_name?: string },
+  maxBytes: number = MAX_SAFE_INGEST_PAYLOAD_BYTES,
+): SpanData[][] {
+  if (spans.length <= 1) return [spans]
+
+  const chunks: SpanData[][] = []
+  let currentChunk: SpanData[] = []
+
+  for (const span of spans) {
+    const candidatePayload = {
+      ...basePayload,
+      spans: [...currentChunk, span],
+    }
+    const candidateBytes = Buffer.byteLength(
+      JSON.stringify(candidatePayload),
+      'utf8',
+    )
+
+    if (candidateBytes > maxBytes && currentChunk.length > 0) {
+      chunks.push(currentChunk)
+      currentChunk = [span]
+    } else {
+      currentChunk.push(span)
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk)
+  }
+
+  return chunks
+}
+
 /**
  * A group of related spans. Collects spans and sends them in one
- * batch to the AgentDecode ingest API on flush.
+ * batch (or bounded sub-batches if exceeding 4 MiB) to the AgentDecode ingest API on flush.
  */
 export class Session {
   private _spans: SpanData[] = []
@@ -24,19 +65,28 @@ export class Session {
   _fetchFn?: typeof fetch
 
   constructor(options: SessionOptions) {
-    this._options = options
+    this._options = {
+      ...options,
+      timeout: options.timeout ?? 10,
+      maxRetries: options.maxRetries ?? 3,
+    }
   }
 
   /**
-   * Create a child span. Returns a `SpanContext` whose `.run()`
-   * method handles timing and error capture automatically.
-   *
-   * If called inside another `SpanContext.run()`, the new span
-   * automatically nests under the active span.
+   * Start a new span in this session.
+   * If a span is currently active, the new span becomes its child.
    */
-  span(name: string, spanType: SpanType = 'agent'): SpanContext {
+  startSpan(name: string, spanType: SpanType = 'chain'): Span {
     const parentId = this._currentSpan?.clientSpanId
     const span = new Span(name, spanType, parentId)
+    return span
+  }
+
+  /**
+   * Convenience wrapper that automatically starts, runs, and finishes a span.
+   */
+  span(name: string, spanType: SpanType = 'chain'): SpanContext {
+    const span = this.startSpan(name, spanType)
     return new SpanContext(span, this)
   }
 
@@ -50,50 +100,64 @@ export class Session {
     this._currentSpan = span
   }
 
-  /** Send all collected spans to `/api/ingest`. */
+  /** Send all collected spans to `/api/ingest`, splitting into bounded chunks if payload exceeds 3.5 MiB. */
   async flush(): Promise<void> {
     if (this._spans.length === 0) return
 
     const spansToSend = [...this._spans]
     this._spans = []
 
-    const payload = {
+    const basePayload = {
       session_id: this._options.sessionId,
       session_name: this._options.sessionName,
-      spans: spansToSend,
     }
 
-    // Persist to WAL before attempting transmission
-    let batchId: string | undefined
-    if (this._options.wal) {
-      batchId = await this._options.wal.enqueue(
-        payload,
-        this._options.sessionName,
-        this._options.sessionId,
-      )
-    }
+    // Split spans if serialized payload exceeds safe 3.5 MiB threshold
+    const spanChunks = splitSpansIntoBoundedChunks(
+      spansToSend,
+      basePayload,
+      MAX_SAFE_INGEST_PAYLOAD_BYTES,
+    )
 
-    try {
-      await this._sendWithRetry(payload)
-      // Confirmed server acceptance: acknowledge and delete from WAL
-      if (batchId && this._options.wal) {
-        await this._options.wal.acknowledge(batchId)
+    for (const chunk of spanChunks) {
+      const chunkPayload = {
+        ...basePayload,
+        spans: chunk,
       }
-    } catch (error: any) {
-      if (batchId && this._options.wal) {
-        if (this._isClientError(error)) {
-          await this._options.wal.recordPermanentFailure(
-            batchId,
-            error.message || String(error),
-          )
-        } else {
-          await this._options.wal.recordRetry(
-            batchId,
-            error.message || String(error),
-          )
+
+      // Persist chunk to WAL before attempting transmission
+      let batchId: string | undefined
+      if (this._options.wal) {
+        batchId = await this._options.wal.enqueue(
+          chunkPayload,
+          this._options.sessionName,
+          this._options.sessionId,
+        )
+      }
+
+      try {
+        await this._sendWithRetry(chunkPayload)
+        // Confirmed server acceptance: acknowledge only this successfully accepted chunk
+        if (batchId && this._options.wal) {
+          await this._options.wal.acknowledge(batchId)
         }
+      } catch (error: any) {
+        const err = error instanceof Error ? error : new Error(String(error))
+        if (batchId && this._options.wal) {
+          if (this._isClientError(err)) {
+            await this._options.wal.recordPermanentFailure(
+              batchId,
+              err.message,
+            )
+          } else {
+            await this._options.wal.recordRetry(
+              batchId,
+              err.message,
+            )
+          }
+        }
+        throw err
       }
-      throw error
     }
   }
 
@@ -192,16 +256,6 @@ export class Session {
 
 /**
  * Wraps a `Span` with automatic start/finish and error capture.
- *
- * ```ts
- * await session.span('llm_call', 'llm').run(async (span) => {
- *   span.model = 'gpt-4o'
- *   span.input = { prompt: 'Hello' }
- *   const result = await callLlm(...)
- *   span.output = result
- *   return result
- * })
- * ```
  */
 export class SpanContext {
   private _span: Span

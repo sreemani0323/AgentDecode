@@ -294,6 +294,19 @@ describe('NodeFsWalStorage', () => {
 
   it('recovers batches after actual Node.js process termination', async () => {
     const distPath = path.resolve(__dirname, '../dist/index.js')
+    if (!fs.existsSync(distPath)) {
+      const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+      const build = child_process.spawnSync(npmCmd, ['run', 'build'], {
+        cwd: path.resolve(__dirname, '..'),
+        encoding: 'utf8',
+      })
+      if (build.status !== 0) {
+        console.error('SDK build stderr:', build.stderr)
+        console.error('SDK build stdout:', build.stdout)
+      }
+      expect(build.status).toBe(0)
+    }
+
     const subScript = `
       const { NodeFsWalStorage } = require(${JSON.stringify(distPath)});
       const wal = new NodeFsWalStorage({ storageDir: ${JSON.stringify(tempDir)} });

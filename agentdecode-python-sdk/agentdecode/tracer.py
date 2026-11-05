@@ -29,6 +29,41 @@ from urllib.request import Request, urlopen
 
 from agentdecode.wal import SQLiteWAL, WALBatch, WALCapacityError
 
+MAX_SAFE_INGEST_PAYLOAD_BYTES = int(3.5 * 1024 * 1024)  # 3.5 MiB
+
+
+def _split_spans_into_bounded_chunks(
+    spans: List[Dict[str, Any]],
+    base_payload: Dict[str, Any],
+    max_bytes: int = MAX_SAFE_INGEST_PAYLOAD_BYTES,
+) -> List[List[Dict[str, Any]]]:
+    """Split spans into chunks such that each serialized request is <= max_bytes."""
+    if not spans:
+        return []
+
+    base_copy = dict(base_payload)
+    base_copy["spans"] = []
+    base_overhead = len(json.dumps(base_copy, default=str).encode("utf-8")) + 2
+
+    chunks: List[List[Dict[str, Any]]] = []
+    current_chunk: List[Dict[str, Any]] = []
+    current_chunk_bytes = base_overhead
+
+    for span in spans:
+        span_bytes = len(json.dumps(span, default=str).encode("utf-8")) + 1
+        if current_chunk and (current_chunk_bytes + span_bytes > max_bytes):
+            chunks.append(current_chunk)
+            current_chunk = [span]
+            current_chunk_bytes = base_overhead + span_bytes
+        else:
+            current_chunk.append(span)
+            current_chunk_bytes += span_bytes
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
 
 class HTTPClientError(RuntimeError):
     """Permanent 4xx client error (excluding 429)."""
@@ -271,99 +306,120 @@ class Session:
         if not self._spans:
             return {}
 
-        payload: Dict[str, Any] = {
+        base_payload: Dict[str, Any] = {
             "session_name": self.name,
-            "spans": [s.to_dict() for s in self._spans],
         }
         if self.session_id:
-            payload["session_id"] = self.session_id
+            base_payload["session_id"] = self.session_id
 
-        # Persist to WAL before attempting transmission if WAL is active
-        batch_id: Optional[str] = None
-        if self._wal is not None:
-            try:
-                batch_id = self._wal.enqueue(
-                    payload=payload,
-                    session_name=self.name,
-                    session_id=self.session_id,
-                )
-            except WALCapacityError as e:
-                if silent_fail:
-                    print(f"[agentdecode] Warning: {e}", file=sys.stderr)
-                    return {}
-                raise
+        all_span_dicts = [s.to_dict() for s in self._spans]
+        full_payload = dict(base_payload)
+        full_payload["spans"] = all_span_dicts
 
-        if self._send_fn is not None:
-            try:
-                res = self._send_fn(payload)
-                if batch_id and self._wal is not None:
-                    self._wal.acknowledge(batch_id)
-                return res if res is not None else {}
-            except Exception as e:
-                if batch_id and self._wal is not None:
-                    self._wal.record_retry(batch_id, str(e))
-                if not silent_fail:
-                    raise
-                return {}
-
-        # Use threading to enforce flush_timeout across all retries
-        result: Dict[str, Any] = {}
-        error: Optional[Exception] = None
-        is_client_error = False
-
-        def _do_send():
-            nonlocal result, error, is_client_error
-            try:
-                result = _http_post(
-                    url=f"{self._endpoint}/api/ingest",
-                    api_key=self._api_key,
-                    payload=payload,
-                    max_retries=self._max_retries,
-                    timeout=self._timeout,
-                    silent_fail=False,
-                    jitter=True,
-                )
-            except HTTPClientError as e:
-                is_client_error = True
-                error = e
-            except Exception as e:
-                error = e
-
-        thread = threading.Thread(target=_do_send, daemon=True)
-        thread.start()
-        thread.join(timeout=self._flush_timeout)
-
-        if thread.is_alive():
-            # Flush timed out — trace safely retained in WAL
-            msg = f"flush timed out after {self._flush_timeout}s"
-            if batch_id and self._wal is not None:
-                self._wal.record_retry(batch_id, msg)
-            print(
-                f"[agentdecode] Warning: flush timed out after "
-                f"{self._flush_timeout}s — trace persisted in WAL for retry",
-                file=sys.stderr,
+        raw_bytes = len(json.dumps(full_payload, default=str).encode("utf-8"))
+        if raw_bytes > MAX_SAFE_INGEST_PAYLOAD_BYTES and len(all_span_dicts) > 1:
+            chunks = _split_spans_into_bounded_chunks(
+                all_span_dicts, base_payload, MAX_SAFE_INGEST_PAYLOAD_BYTES
             )
-            return {}
+        else:
+            chunks = [all_span_dicts]
 
-        if error is not None:
-            if batch_id and self._wal is not None:
-                if is_client_error:
-                    self._wal.record_permanent_failure(batch_id, str(error))
-                else:
-                    self._wal.record_retry(batch_id, str(error))
-            if silent_fail:
+        last_result: Dict[str, Any] = {}
+        for chunk in chunks:
+            chunk_payload = dict(base_payload)
+            chunk_payload["spans"] = chunk
+
+            # Persist chunk to WAL before attempting transmission if WAL is active
+            batch_id: Optional[str] = None
+            if self._wal is not None:
+                try:
+                    batch_id = self._wal.enqueue(
+                        payload=chunk_payload,
+                        session_name=self.name,
+                        session_id=self.session_id,
+                    )
+                except WALCapacityError as e:
+                    if silent_fail:
+                        print(f"[agentdecode] Warning: {e}", file=sys.stderr)
+                        return {}
+                    raise
+
+            if self._send_fn is not None:
+                try:
+                    res = self._send_fn(chunk_payload)
+                    if batch_id and self._wal is not None:
+                        self._wal.acknowledge(batch_id)
+                    last_result = res if res is not None else {}
+                except Exception as e:
+                    if batch_id and self._wal is not None:
+                        self._wal.record_retry(batch_id, str(e))
+                    if not silent_fail:
+                        raise
+                    return {}
+                continue
+
+            # Use threading to enforce flush_timeout across all retries
+            result: Dict[str, Any] = {}
+            error: Optional[Exception] = None
+            is_client_error = False
+
+            def _do_send(p=chunk_payload):
+                nonlocal result, error, is_client_error
+                try:
+                    result = _http_post(
+                        url=f"{self._endpoint}/api/ingest",
+                        api_key=self._api_key,
+                        payload=p,
+                        max_retries=self._max_retries,
+                        timeout=self._timeout,
+                        silent_fail=False,
+                        jitter=True,
+                    )
+                except HTTPClientError as e:
+                    is_client_error = True
+                    error = e
+                except Exception as e:
+                    error = e
+
+            thread = threading.Thread(target=_do_send, daemon=True)
+            thread.start()
+            thread.join(timeout=self._flush_timeout)
+
+            if thread.is_alive():
+                # Flush timed out — trace safely retained in WAL
+                msg = f"flush timed out after {self._flush_timeout}s"
+                if batch_id and self._wal is not None:
+                    self._wal.record_retry(batch_id, msg)
                 print(
-                    f"[agentdecode] Warning: failed to send trace: {error}",
+                    f"[agentdecode] Warning: flush timed out after "
+                    f"{self._flush_timeout}s — trace persisted in WAL for retry",
                     file=sys.stderr,
                 )
+                if not silent_fail:
+                    raise TimeoutError(msg)
                 return {}
-            raise error
 
-        # Confirmed successful delivery: acknowledge and delete from WAL
-        if batch_id and self._wal is not None:
-            self._wal.acknowledge(batch_id)
+            if error is not None:
+                if batch_id and self._wal is not None:
+                    if is_client_error:
+                        self._wal.record_permanent_failure(batch_id, str(error))
+                    else:
+                        self._wal.record_retry(batch_id, str(error))
+                if silent_fail:
+                    print(
+                        f"[agentdecode] Warning: failed to send trace: {error}",
+                        file=sys.stderr,
+                    )
+                    return {}
+                raise error
 
-        return result
+            # Confirmed successful delivery: acknowledge and delete from WAL
+            if batch_id and self._wal is not None:
+                self._wal.acknowledge(batch_id)
+
+            last_result = result
+
+        return last_result
 
 
 class AgentDecode:
@@ -495,6 +551,38 @@ class AgentDecode:
                 break
 
             try:
+                payload = batch.payload
+                spans = payload.get("spans", []) if isinstance(payload, dict) else []
+                if isinstance(spans, list) and len(spans) > 1:
+                    raw_bytes = len(json.dumps(payload, default=str).encode("utf-8"))
+                    if raw_bytes > MAX_SAFE_INGEST_PAYLOAD_BYTES:
+                        base = {
+                            "session_name": payload.get("session_name", ""),
+                        }
+                        if "session_id" in payload:
+                            base["session_id"] = payload["session_id"]
+                        chunks = _split_spans_into_bounded_chunks(
+                            spans, base, MAX_SAFE_INGEST_PAYLOAD_BYTES
+                        )
+                        for chunk in chunks:
+                            chunk_p = dict(base)
+                            chunk_p["spans"] = chunk
+                            if send_fn is not None:
+                                send_fn(chunk_p)
+                            else:
+                                _http_post(
+                                    url=f"{self.endpoint}/api/ingest",
+                                    api_key=self.api_key,
+                                    payload=chunk_p,
+                                    max_retries=self.max_retries,
+                                    timeout=self.timeout,
+                                    silent_fail=False,
+                                    jitter=True,
+                                )
+                        self.wal.acknowledge(batch.id)
+                        acked_count += 1
+                        continue
+
                 if send_fn is not None:
                     send_fn(batch.payload)
                 else:

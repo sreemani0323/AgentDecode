@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
       .gte('score', minScore),
     supabase
       .from('trace_evaluations')
-      .select('trace_id, score, reasoning')
+      .select('span_id, trace_id, score, reasoning')
       .eq('project_id', projectId)
       .gte('score', minScore),
     supabase
@@ -79,15 +79,21 @@ export async function GET(request: NextRequest) {
     evalScoresMap.set(es.span_id, { score: es.score, reasoning: es.reasoning })
   }
 
-  const traceEvalsMap = new Map<string, { score: number; reasoning: string }>()
+  const traceEvalsBySpanId = new Map<string, { score: number; reasoning: string }>()
+  const traceEvalsByTraceId = new Map<string, { score: number; reasoning: string }>()
   for (const te of traceEvalsRes.data || []) {
-    traceEvalsMap.set(te.trace_id, { score: te.score, reasoning: te.reasoning })
+    if (te.span_id) {
+      traceEvalsBySpanId.set(te.span_id, { score: te.score, reasoning: te.reasoning })
+    } else if (te.trace_id) {
+      traceEvalsByTraceId.set(te.trace_id, { score: te.score, reasoning: te.reasoning })
+    }
   }
 
   // Filter spans that qualify from eval_scores or trace_evaluations
   const spans = allLlmSpans.filter((span) => {
     if (evalScoresMap.has(span.id)) return true
-    if (span.trace_id && traceEvalsMap.has(span.trace_id)) return true
+    if (traceEvalsBySpanId.has(span.id)) return true
+    if (span.trace_id && traceEvalsByTraceId.has(span.trace_id)) return true
     return false
   })
 

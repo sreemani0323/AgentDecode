@@ -12,7 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "type-check": "tsc --noEmit",
-    "analyze": "node scripts/analyze-bundle.mjs"
+    "analyze": "node scripts/analyze-bundle.mjs",
+    "worker:outbox": "node scripts/run-outbox-worker.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.80",

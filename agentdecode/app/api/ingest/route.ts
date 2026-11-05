@@ -3,9 +3,9 @@ import crypto from 'crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { hashApiKey } from '@/lib/utils'
 import { checkAndFireAlerts } from '@/lib/alerts'
-import { ingestRateLimiter, getClientIdentifier } from '@/lib/rate-limit'
+import * as rateLimitModule from '@/lib/rate-limit'
 import { checkEnv } from '@/lib/env'
-import { validateIngestPayload } from '@/lib/validation'
+import { validateIngestPayload, MAX_REQUEST_BODY_BYTES } from '@/lib/validation'
 
 export async function POST(request: Request) {
   // 0. Check maintenance admission gate
@@ -28,40 +28,65 @@ export async function POST(request: Request) {
   // 0.1 Check critical env vars
   const envCheck = checkEnv()
   if (!envCheck.ok) {
-    const missingKeys = envCheck.missing.map(m => m.key).join(', ')
+    const missingKeys = envCheck.missing.map((m) => m.key).join(', ')
     return NextResponse.json(
       { error: `Server misconfigured. Missing: ${missingKeys}` },
       { status: 503 }
     )
   }
 
+  // 0.2 Check request body size via Content-Length header up-front
+  const contentLengthHeader = request.headers.get('content-length')
+  if (contentLengthHeader) {
+    const contentLength = parseInt(contentLengthHeader, 10)
+    if (!isNaN(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+      return NextResponse.json(
+        {
+          error: `Payload Too Large: Request body exceeds maximum allowed size of ${MAX_REQUEST_BODY_BYTES / (1024 * 1024)}MB`,
+        },
+        { status: 413 }
+      )
+    }
+  }
+
   // 1. Get Authorization header
   const authHeader = request.headers.get('authorization')
-
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
   }
 
   const apiKeyRaw = authHeader.replace('Bearer ', '')
 
-  // 2. Rate limit check (uses API key as identifier)
-  const clientId = getClientIdentifier(request, apiKeyRaw)
-  const rateCheck = ingestRateLimiter.check(clientId)
+  // 2. Pre-auth rate limit check
+  const checkDistributed = (rateLimitModule as any).checkDistributedRateLimit
+  const ingestLimiter = rateLimitModule.ingestRateLimiter
+  const getClientIdent = rateLimitModule.getClientIdentifier
 
-  if (!rateCheck.allowed) {
-    return NextResponse.json(
-      {
-        error: 'Rate limit exceeded. Please slow down.',
-        retry_after_ms: rateCheck.retryAfterMs,
-      },
-      {
-        status: 429,
-        headers: {
-          'Retry-After': Math.ceil(rateCheck.retryAfterMs / 1000).toString(),
-          'X-RateLimit-Remaining': '0',
+  if (typeof checkDistributed === 'function') {
+    const preRate = await checkDistributed(request, 'ingest', { apiKey: apiKeyRaw })
+    if (!preRate.allowed) {
+      return preRate.response
+    }
+  } else if (ingestLimiter && typeof ingestLimiter.check === 'function') {
+    const clientId = typeof getClientIdent === 'function'
+      ? getClientIdent(request, apiKeyRaw)
+      : `key:${apiKeyRaw}`
+    const rateCheck = ingestLimiter.check(clientId)
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Rate limit exceeded. Please slow down.',
+          retry_after_ms: rateCheck.retryAfterMs,
         },
-      }
-    )
+        {
+          status: 429,
+          headers: {
+            'Retry-After': Math.max(1, Math.ceil(rateCheck.retryAfterMs / 1000)).toString(),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      )
+    }
   }
 
   // 3. Hash the provided key
@@ -84,17 +109,66 @@ export async function POST(request: Request) {
 
   const projectId = apiKeyRecord.project_id
 
-  // 8. Update last_used_at
+  // 6. Post-auth project-scoped rate limit check
+  if (typeof checkDistributed === 'function') {
+    const postRate = await checkDistributed(request, 'ingest', { projectId, supabase })
+    if (!postRate.allowed) {
+      return postRate.response
+    }
+  }
+
+  // 7. Update last_used_at
   await supabase
     .from('api_keys')
     .update({ last_used_at: new Date().toISOString() })
     .eq('id', apiKeyRecord.id)
 
-  // Parse and validate body
+  // 8. Stream/read and validate body with byte-length guard
   let rawBody: unknown
   try {
-    rawBody = await request.json()
-  } catch {
+    if (request.body && typeof (request.body as any).getReader === 'function') {
+      const reader = (request.body as any).getReader()
+      const chunks: Uint8Array[] = []
+      let totalBytes = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) {
+          totalBytes += value.byteLength
+          if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+            return NextResponse.json(
+              {
+                error: `Payload Too Large: Request body exceeds maximum allowed size of ${MAX_REQUEST_BODY_BYTES / (1024 * 1024)}MB`,
+              },
+              { status: 413 }
+            )
+          }
+          chunks.push(value)
+        }
+      }
+
+      const merged = new Uint8Array(totalBytes)
+      let offset = 0
+      for (const chunk of chunks) {
+        merged.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+      const text = new TextDecoder().decode(merged)
+      rawBody = JSON.parse(text)
+    } else {
+      const text = await request.text()
+      if (Buffer.byteLength(text, 'utf8') > MAX_REQUEST_BODY_BYTES) {
+        return NextResponse.json(
+          {
+            error: `Payload Too Large: Request body exceeds maximum allowed size of ${MAX_REQUEST_BODY_BYTES / (1024 * 1024)}MB`,
+          },
+          { status: 413 }
+        )
+      }
+      rawBody = JSON.parse(text)
+    }
+  } catch (err: any) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
@@ -134,7 +208,10 @@ export async function POST(request: Request) {
         .single()
 
       if (sessionError || !session) {
-        return NextResponse.json({ error: 'Failed to create/find session: ' + (sessionError?.message || 'unknown') }, { status: 500 })
+        return NextResponse.json(
+          { error: 'Failed to create/find session: ' + (sessionError?.message || 'unknown') },
+          { status: 500 }
+        )
       }
       sessionId = session.id
     } else {
@@ -151,13 +228,16 @@ export async function POST(request: Request) {
         .single()
 
       if (sessionError || !newSession) {
-        return NextResponse.json({ error: 'Failed to create session: ' + (sessionError?.message || 'unknown') }, { status: 500 })
+        return NextResponse.json(
+          { error: 'Failed to create session: ' + (sessionError?.message || 'unknown') },
+          { status: 500 }
+        )
       }
       sessionId = newSession.id
     }
 
-    // 10. Insert all spans with client_span_id → DB UUID mapping
-    // Sort: parent spans (no parent) first, then children
+    // 10. Insert all spans with client_span_id -> DB UUID mapping
+    // Sort: root spans first, then children
     const sortedSpans = [...body.spans].sort((a: any, b: any) => {
       const aIsRoot = !a.parent_span_id && !a.parent_client_span_id
       const bIsRoot = !b.parent_span_id && !b.parent_client_span_id
@@ -208,28 +288,58 @@ export async function POST(request: Request) {
 
     let spanIds: string[] = []
     let spansToInsert: any[] = []
-
-    // Attempt single-transaction batch RPC if supported
     let usedRpc = false
+    let rpcErrorMessage = ''
+
+    // Attempt single-transaction batch RPC
     if (typeof (supabase as any).rpc === 'function') {
       try {
-        const { data: rpcSpans, error: rpcErr } = await (supabase as any).rpc('ingest_spans_batch_transactional', {
-          p_project_id: projectId,
-          p_session_id: sessionId,
-          p_spans: preparedSpans,
-        })
+        const { data: rpcSpans, error: rpcErr } = await (supabase as any).rpc(
+          'ingest_spans_batch_transactional',
+          {
+            p_project_id: projectId,
+            p_session_id: sessionId,
+            p_spans: preparedSpans,
+          }
+        )
         if (!rpcErr && Array.isArray(rpcSpans) && rpcSpans.length > 0) {
           spanIds = rpcSpans.map((r: any) => r.out_db_id || r.db_id)
           spansToInsert = preparedSpans
           usedRpc = true
+        } else if (rpcErr) {
+          rpcErrorMessage = rpcErr.message || 'Transactional RPC error'
         }
-      } catch {
-        // Fall back to table operations
+      } catch (err: any) {
+        rpcErrorMessage = err?.message || 'Transactional RPC threw exception'
       }
     }
 
     if (!usedRpc) {
-      // Fallback path (e.g. mock test environment)
+      // In production or default mode, FAIL CLOSED: eliminate silent fallback to direct table inserts
+      const allowFallback =
+        process.env.NODE_ENV === 'test' && process.env.ALLOW_INGEST_FALLBACK === 'true'
+
+      if (!allowFallback) {
+        console.error(
+          '[Ingest] Transactional ingestion failed or unavailable; failing closed:',
+          rpcErrorMessage
+        )
+        return NextResponse.json(
+          {
+            error: 'Ingestion temporarily unavailable; please retry',
+            details: rpcErrorMessage || 'Transactional ingestion RPC unavailable',
+            retryable: true,
+          },
+          {
+            status: 503,
+            headers: {
+              'Retry-After': '5',
+            },
+          }
+        )
+      }
+
+      // Explicit test-only fallback path for environments mocking only tables
       const clientToDbId = new Map<string, string>()
       for (const span of preparedSpans) {
         let resolvedParentId = span.parent_span_id || null
@@ -264,7 +374,10 @@ export async function POST(request: Request) {
           .single()
 
         if (insertErr || !inserted) {
-          return NextResponse.json({ error: 'Failed to insert span: ' + (insertErr?.message || 'unknown') }, { status: 500 })
+          return NextResponse.json(
+            { error: 'Failed to insert span: ' + (insertErr?.message || 'unknown') },
+            { status: 500 }
+          )
         }
 
         const dbId = inserted.id
@@ -280,6 +393,7 @@ export async function POST(request: Request) {
       for (let i = 0; i < spansToInsert.length; i++) {
         if (spansToInsert[i].span_type === 'llm') {
           const traceId = spansToInsert[i].trace_id || `legacy_${sessionId.replace(/-/g, '')}`
+          const spanDbId = spanIds[i]
           Promise.resolve(
             supabase
               .from('evaluation_outbox')
@@ -287,12 +401,13 @@ export async function POST(request: Request) {
                 {
                   project_id: projectId,
                   trace_id: traceId,
+                  span_id: spanDbId,
                   eval_type: 'span_score',
                   trace_version: 1,
                   status: 'pending',
                   scheduled_at: new Date(Date.now() + 15000).toISOString(),
                   payload: {
-                    span_id: spanIds[i],
+                    span_id: spanDbId,
                     input: spansToInsert[i].input,
                     output: spansToInsert[i].output,
                   },
@@ -306,7 +421,6 @@ export async function POST(request: Request) {
     }
 
     // 11. Update session aggregates
-    // Get ALL spans for this session (including previously ingested ones)
     const { data: allSpans } = await supabase
       .from('spans')
       .select('status, input_tokens, output_tokens, cost_usd, ended_at, started_at')
@@ -322,7 +436,6 @@ export async function POST(request: Request) {
         return sum + (s.cost_usd || 0)
       }, 0)
 
-      // Determine session status
       let sessionStatus: string = 'running'
       const hasErrors = errorCount > 0
       const allHaveEndedAt = allSpans.every((s: any) => s.ended_at != null)
@@ -333,7 +446,6 @@ export async function POST(request: Request) {
         sessionStatus = 'success'
       }
 
-      // Find latest ended_at
       let latestEndedAt: string | null = null
       if (allHaveEndedAt && allSpans.length > 0) {
         latestEndedAt = allSpans.reduce((latest: string, s: any) => {
@@ -362,16 +474,13 @@ export async function POST(request: Request) {
 
     for (let i = 0; i < errorSpans.length; i++) {
       const span = errorSpans[i]
-      // Find the matching inserted span ID
-      // errorSpans are a subset of body.spans, find their index in the original array
       const originalIndex = body.spans.indexOf(span)
       const spanDbId = spanIds[originalIndex]
 
-      // Simple fingerprint: base64 of project_id + span.name + first 50 chars of error_message
-      const fingerprintInput = projectId + ':' + span.name + ':' + (span.error_message || '').slice(0, 50)
+      const fingerprintInput =
+        projectId + ':' + span.name + ':' + (span.error_message || '').slice(0, 50)
       const fingerprint = btoa(encodeURIComponent(fingerprintInput))
 
-      // Check if issue with same fingerprint exists
       const { data: existingIssue } = await supabase
         .from('issues')
         .select('id, occurrence_count')
@@ -380,7 +489,6 @@ export async function POST(request: Request) {
         .single()
 
       if (existingIssue) {
-        // Update existing issue
         await supabase
           .from('issues')
           .update({
@@ -389,7 +497,6 @@ export async function POST(request: Request) {
           })
           .eq('id', existingIssue.id)
 
-        // Insert into issue_spans
         await supabase
           .from('issue_spans')
           .insert({
@@ -397,7 +504,6 @@ export async function POST(request: Request) {
             span_id: spanDbId,
           })
       } else {
-        // Create new issue
         const title = span.name + ': ' + (span.error_message || 'Unknown error').slice(0, 80)
         const now = new Date().toISOString()
 

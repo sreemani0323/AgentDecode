@@ -205,7 +205,7 @@ export async function GET(
           .in("span_id", spanIds),
         supabase
           .from("trace_evaluations")
-          .select("trace_id, score, reasoning, flagged, generated_at")
+          .select("span_id, trace_id, score, reasoning, flagged, generated_at")
           .eq("project_id", session.project_id),
       ]);
 
@@ -223,14 +223,22 @@ export async function GET(
 
       // Fallback: if trace_evaluations exists but span has no eval_scores row, synthesize from trace_evaluations
       if (traceEvalRes.data && traceEvalRes.data.length > 0) {
-        const traceEvalMap = new Map<string, any>();
+        const traceEvalBySpanId = new Map<string, any>();
+        const traceEvalByTraceId = new Map<string, any>();
         for (const te of traceEvalRes.data) {
-          traceEvalMap.set(te.trace_id, te);
+          if (te.span_id) {
+            traceEvalBySpanId.set(te.span_id, te);
+          } else if (te.trace_id) {
+            traceEvalByTraceId.set(te.trace_id, te);
+          }
         }
 
         for (const span of spansList) {
-          if (!evalScoresMap.has(span.id) && span.trace_id && traceEvalMap.has(span.trace_id)) {
-            const te = traceEvalMap.get(span.trace_id);
+          const te =
+            traceEvalBySpanId.get(span.id) ||
+            (span.trace_id ? traceEvalByTraceId.get(span.trace_id) : null);
+          if (!evalScoresMap.has(span.id) && te) {
+
             evalScoresMap.set(span.id, {
               span_id: span.id,
               score: te.score,
